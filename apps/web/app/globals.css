@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --ink: #0f172a;
+  --muted: #475569;
+  --accent: #02c39a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 5% 0%, #d9f6ef 0%, transparent 35%),
+    radial-gradient(circle at 95% 0%, #fcefd9 0%, transparent 30%),
+    var(--bg);
+  font-family:
+    "Space Grotesk",
+    "Segoe UI",
+    sans-serif;
+}

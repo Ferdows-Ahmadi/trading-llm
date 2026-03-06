@@ -1,0 +1,28 @@
+{
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "generated_at": "2026-03-06T11:42:00+00:00",
+  "setup_direction": "bullish",
+  "setup_type": "pullback_continuation",
+  "supporting_factors": [
+    "Bull trend regime confirmed.",
+    "Price pulled back toward EMA20 and bounced.",
+    "EMA alignment (20 > 50 > 200) supports upside structure.",
+    "Recent news sentiment leans positive (3 positive vs 1 negative items)."
+  ],
+  "contradictory_factors": [
+    "1 recent news items show sentiment/price contradiction signals.",
+    "1 negative news item(s) oppose the bullish thesis."
+  ],
+  "invalidation": {
+    "level": 103.9,
+    "condition": "Invalidate if price closes below 103.900000."
+  },
+  "confidence": {
+    "label": "medium",
+    "score": 66.4,
+    "explanation": "Confidence is medium (66.4/100) based on deterministic technical and context signals; 2 contradiction factor(s) reduce certainty."
+  },
+  "thesis_summary": "BTCUSDT 1h: bullish thesis from pullback_continuation with medium confidence. View this as a conditional scenario, not a prediction, and monitor 2 opposing signal(s).",
+  "disclaimer": "Informational only. This thesis is a probabilistic interpretation of historical data and current context, not financial advice."
+}

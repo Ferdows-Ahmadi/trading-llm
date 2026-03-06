@@ -1,0 +1,1 @@
+"""Trade ideas test package."""

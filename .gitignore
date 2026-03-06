@@ -1,0 +1,29 @@
+# Node / frontend
+node_modules/
+.next/
+dist/
+coverage/
+
+# Python / backend
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.pyc
+
+# Environment / secrets
+.env
+.env.local
+
+# Databases / local artifacts
+*.duckdb
+*.sqlite3
+tmp/
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "id": "9274b7d7-8ea2-4f5a-a210-7e6f9ef9c7b0",
+      "title": "BTC rallies as risk appetite returns to crypto markets",
+      "summary": "Analysts highlight improving sentiment and renewed inflows into major tokens.",
+      "url": "https://example.com/news/btc-rally",
+      "source_name": "MarketWire",
+      "published_at": "2026-03-06T09:30:00+00:00",
+      "sentiment_label": "positive",
+      "importance_score": 74.8,
+      "asset_symbols": ["BTCUSDT", "ETHUSDT"],
+      "contradiction_signals": [
+        {
+          "asset_symbol": "BTCUSDT",
+          "price_change_pct_24h": -1.65,
+          "is_contradiction": true
+        },
+        {
+          "asset_symbol": "ETHUSDT",
+          "price_change_pct_24h": 0.92,
+          "is_contradiction": false
+        }
+      ]
+    }
+  ]
+}

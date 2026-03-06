@@ -1,0 +1,251 @@
+Build a production-grade monorepo for an AI-assisted trading analysis platform focused on crypto and forex.
+
+PROJECT GOAL
+Create a full-stack, modular platform that helps traders and analysts monitor markets, screen opportunities, analyze price action, incorporate news and macro context, generate explainable trade ideas, backtest strategies, and paper trade. This is NOT a guaranteed-profit bot and should be designed as a decision-support and research platform first.
+
+PRIMARY REQUIREMENTS
+1. Support crypto and forex.
+2. Use only open-source and free resources by default.
+3. Build the system so that paid providers can be added later via adapters.
+4. Prioritize modular architecture, testability, clean code, and strong typing.
+5. Produce an MVP that is genuinely usable by a solo trader/researcher.
+
+TECH STACK
+- Frontend: Next.js (App Router), TypeScript, Tailwind, shadcn/ui
+- Backend API: FastAPI (Python 3.12+)
+- Analytics engine: Python with pandas, numpy, scipy/statsmodels where useful
+- Main DB: PostgreSQL
+- Analytics DB: DuckDB for time-series research and backtests
+- Background jobs: APScheduler or lightweight worker pattern
+- Containerization: Docker + docker-compose
+- Auth: simple email/password auth with JWT or NextAuth-compatible approach
+- Charts: Lightweight Charts or ECharts
+- Testing: pytest for backend, vitest/playwright for frontend where useful
+- Linting/formatting: ruff, black, mypy, eslint, prettier
+
+DATA SOURCES
+- Crypto market data via CCXT adapters
+- Forex, crypto, technical indicators, market news, and market status via Alpha Vantage free-tier adapters
+- Design source adapters so additional providers can be plugged in later
+- Add rate limiting, retry logic, caching, normalization, and provider health tracking
+
+CORE PRODUCT MODULES
+1. Market Data Hub
+   - unified asset registry
+   - symbol normalization
+   - OHLCV ingestion
+   - ticker/volume/spread snapshots
+   - provider adapters
+   - historical data fetchers
+   - incremental updates
+   - caching and data quality checks
+
+2. Analysis Engine
+   - technical indicators (EMA, SMA, RSI, MACD, ATR, Bollinger Bands, ADX)
+   - market structure (swing highs/lows, support/resistance, break of structure)
+   - volatility regime detection
+   - trend classification across multiple timeframes
+   - correlation analysis
+   - event-aware annotations
+
+3. News and Context Engine
+   - ingest news articles/headlines
+   - deduplicate similar headlines
+   - asset relevance tagging
+   - sentiment classification
+   - importance scoring
+   - market-moving event summaries
+   - contradiction detection between news and price action
+
+4. Screener and Opportunity Ranking
+   - customizable screeners
+   - rules-based setup detectors:
+     - breakout
+     - pullback continuation
+     - mean reversion
+     - volatility expansion
+     - trend alignment
+   - weighted scoring engine
+   - ranked opportunities with reasons
+
+5. Explainable Trade Thesis Generator
+   - create concise human-readable summaries
+   - include bullish/bearish factors
+   - include invalidation logic
+   - include confidence level with explanation
+   - never present certainty
+   - always present assumptions and contradictory signals
+
+6. Risk Management Tools
+   - position size calculator
+   - stop-loss and take-profit planning
+   - risk/reward calculator
+   - portfolio exposure checks
+   - correlation risk warnings
+   - max drawdown guardrails
+
+7. Research Lab
+   - strategy builder interface
+   - backtesting engine
+   - parameter optimization
+   - event studies around headlines/news clusters
+   - trade journal
+   - performance dashboard
+
+8. Paper Trading
+   - simulated order placement
+   - simulated portfolio/equity curve
+   - alerting
+   - replay mode for historical sessions
+
+USER ROLES
+- solo trader/researcher
+- analyst
+- admin
+
+INITIAL UI PAGES
+- Dashboard
+- Markets
+- Asset Detail Page
+- Screeners
+- News & Context
+- Trade Ideas
+- Risk Tools
+- Research Lab
+- Journal
+- Settings
+
+DASHBOARD REQUIREMENTS
+Dashboard should show:
+- market overview
+- watchlist
+- top movers
+- current opportunities
+- latest relevant news
+- regime summary
+- alerts
+- quick risk widgets
+
+ASSET DETAIL PAGE REQUIREMENTS
+For each asset/pair show:
+- price chart with timeframe switching
+- indicators overlay
+- technical summary
+- regime/trend summary
+- support/resistance zones
+- related news
+- signal history
+- thesis panel
+- risk calculator
+- backtest snippets for common setups
+
+API DESIGN
+- Use versioned REST API under /api/v1
+- Generate OpenAPI docs
+- Use Pydantic models everywhere
+- Add clear error contracts
+- Add pagination/filtering/sorting where appropriate
+
+DATA MODEL REQUIREMENTS
+Create robust schema/models for:
+- assets
+- providers
+- candles
+- ticks/snapshots
+- indicator values
+- news items
+- tagged asset-news links
+- opportunities/signals
+- theses
+- alerts
+- journal entries
+- backtest runs/results
+- paper trades
+- user settings/watchlists
+
+ARCHITECTURE REQUIREMENTS
+- Use adapter pattern for data providers
+- Use service layer between API and persistence
+- Use repository pattern where appropriate
+- Separate ingestion, analysis, ranking, and presentation concerns
+- Keep business logic out of route handlers
+- Document all major modules
+
+QUALITY REQUIREMENTS
+- Strong typing and validation
+- Unit tests for core services
+- Integration tests for provider adapters
+- Seed scripts and demo data
+- Dockerized local development
+- Example .env files
+- README with setup instructions
+- Architecture diagram in markdown
+- Task checklist for future expansion
+
+NON-FUNCTIONAL REQUIREMENTS
+- Graceful handling of provider failures
+- Caching to respect free-tier limits
+- Basic observability: logs, health endpoints, provider status
+- Secure secret handling
+- Timezone-safe timestamps
+- Clear disclaimers that outputs are informational and not financial advice
+
+IMPORTANT PRODUCT RULES
+- Do not market this as guaranteed prediction.
+- Do not fake confidence.
+- Always show uncertainty and conflicting signals.
+- Design for explainability first.
+- Make it useful even if the LLM layer is disabled.
+- Prefer deterministic/rules-based core analytics, with LLM used only for summarization and explanation.
+
+DELIVERABLES
+1. Full monorepo scaffold
+2. Backend API with modular services
+3. Frontend UI with initial polished dashboard
+4. Database schema and migrations
+5. Provider adapters for CCXT and Alpha Vantage
+6. Analysis and scoring engine
+7. News/context ingestion and summarization
+8. Research lab and backtesting starter
+9. Paper trading starter
+10. Full README and setup docs
+
+IMPLEMENTATION STRATEGY
+Work in phases.
+Start by scaffolding the monorepo, backend, frontend, Docker, database config, and base schemas.
+Then implement market data ingestion.
+Then implement indicators and screening.
+Then add news/context.
+Then add scoring/explanations.
+Then add research lab and paper trading.
+At each phase:
+- create clean commits
+- write/update tests
+- update docs
+- keep the app runnable
+
+OUTPUT STYLE
+- Show file tree first
+- Then generate files phase by phase
+- For each phase, explain architectural decisions briefly
+- Do not skip boilerplate that is required to run
+- Prefer maintainable production-style code over clever hacks
+Folder structure I’d push for
+trading-analyst/
+  apps/
+    web/
+    api/
+  packages/
+    ui/
+    config/
+    types/
+    analytics/
+    data-connectors/
+    scoring/
+    backtest/
+    shared/
+  infra/
+    docker/
+    scripts/
+  docs/
+  tests/
