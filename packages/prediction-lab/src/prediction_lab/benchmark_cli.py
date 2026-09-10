@@ -14,7 +14,10 @@ from prediction_lab.datasets import freeze_cases, temporal_question_split
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a leakage-safe Kalshi benchmark from prediction-market-analysis Parquet data."
+        description=(
+            "Build a leakage-safe Kalshi benchmark from prediction-market-analysis "
+            "Parquet data."
+        )
     )
     parser.add_argument(
         "source_root",
