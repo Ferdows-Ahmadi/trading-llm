@@ -88,13 +88,22 @@ def _market_sort_time(market: dict[str, Any]) -> pd.Timestamp:
     return pd.Timestamp.min.tz_localize("UTC")
 
 
-def _evenly_order_markets(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Spread attempts across the available time range before filling gaps."""
-    if len(markets) <= 2:
-        return markets
+def _prioritize_markets(
+    markets: list[dict[str, Any]],
+    *,
+    target_questions: int,
+) -> list[dict[str, Any]]:
+    """Spread early trade lookups across the candidate time range."""
     ordered = sorted(markets, key=_market_sort_time)
-    positions = np.linspace(0, len(ordered) - 1, num=len(ordered), dtype=int)
-    return [ordered[index] for index in positions]
+    if len(ordered) <= target_questions * 2:
+        return ordered
+
+    primary_count = min(len(ordered), target_questions * 2)
+    primary_positions = np.linspace(0, len(ordered) - 1, num=primary_count, dtype=int)
+    primary_indices = list(dict.fromkeys(int(index) for index in primary_positions))
+    selected = set(primary_indices)
+    remaining_indices = [index for index in range(len(ordered)) if index not in selected]
+    return [ordered[index] for index in [*primary_indices, *remaining_indices]]
 
 
 class KalshiPublicClient:
@@ -288,7 +297,10 @@ class KalshiPublicClient:
 
         if not candidates:
             return None
-        return max(candidates, key=lambda trade: _utc_timestamp(trade["created_time"], field="created_time"))
+        return max(
+            candidates,
+            key=lambda trade: _utc_timestamp(trade["created_time"], field="created_time"),
+        )
 
 
 def collect_public_kalshi_cases(
@@ -317,7 +329,7 @@ def collect_public_kalshi_cases(
         max_items=max_questions * candidate_multiplier,
         max_pages=max_market_pages,
     )
-    candidates = _evenly_order_markets(candidates)
+    candidates = _prioritize_markets(candidates, target_questions=max_questions)
 
     case_rows: list[dict[str, Any]] = []
     markets_used: list[dict[str, Any]] = []
