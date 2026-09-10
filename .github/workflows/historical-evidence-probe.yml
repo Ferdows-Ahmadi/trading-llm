@@ -1,0 +1,68 @@
+name: Historical Evidence Probe
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-evidence-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe GDELT historical DOC window and Common Crawl index
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          def get(url, params=None):
+              if params:
+                  url = url + "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers={"User-Agent": "trading-llm-research/0.1"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      body = response.read().decode("utf-8", errors="replace")
+                      return response.status, response.geturl(), body
+              except Exception as exc:
+                  return None, url, repr(exc)
+
+          status, url, body = get(
+              "https://api.gdeltproject.org/api/v2/doc/doc",
+              {
+                  "query": "bitcoin",
+                  "mode": "artlist",
+                  "maxrecords": 10,
+                  "format": "json",
+                  "startdatetime": "20251001000000",
+                  "enddatetime": "20251002000000",
+                  "sort": "datedesc",
+              },
+          )
+          print("=== GDELT DOC OCT 2025 ===")
+          print("status:", status)
+          print("url:", url)
+          print("body-prefix:", body[:4000])
+
+          status, url, body = get("https://index.commoncrawl.org/collinfo.json")
+          print("=== COMMON CRAWL COLLECTIONS ===")
+          print("status:", status)
+          if status == 200:
+              collections = json.loads(body)
+              print("collection-count:", len(collections))
+              print("recent-ids:", [item.get("id") for item in collections[:20]])
+              matching = [
+                  item for item in collections
+                  if str(item.get("id", "")).startswith("CC-MAIN-2025")
+              ]
+              print("2025-collections:", [item.get("id") for item in matching[:30]])
+          else:
+              print("body-prefix:", body[:1000])
+          PY
