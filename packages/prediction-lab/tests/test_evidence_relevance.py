@@ -71,10 +71,11 @@ def test_filter_is_label_blind_conservative_and_keeps_empty_questions(tmp_path: 
         )
 
     discovery = tmp_path / "discovery.jsonl"
-    discovery.write_text(
-        "".join(json.dumps({"question_id": question_id}) + "\n" for question_id in ("q1", "q2", "q3", "q4")),
-        encoding="utf-8",
+    discovery_rows = (
+        json.dumps({"question_id": question_id}) + "\n"
+        for question_id in ("q1", "q2", "q3", "q4")
     )
+    discovery.write_text("".join(discovery_rows), encoding="utf-8")
     fixture = {
         "schema_version": 1,
         "questions": {
@@ -128,7 +129,9 @@ def test_filter_is_label_blind_conservative_and_keeps_empty_questions(tmp_path: 
     filtered = json.loads(
         (output / "evidence-fixture.filtered.json").read_text(encoding="utf-8")
     )
-    assert list(filtered["questions"]["q1"])[0]["source_id"] == "brevis-good"
+    q1_items = filtered["questions"]["q1"]
+    assert len(q1_items) == 1
+    assert q1_items[0]["title"] == "Brevis publishes BREV tokenomics"
     assert filtered["questions"]["q2"] == []
     assert filtered["questions"]["q3"] == []
     assert filtered["questions"]["q4"] == []
