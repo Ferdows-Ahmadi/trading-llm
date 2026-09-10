@@ -10,7 +10,8 @@ from prediction_lab.evidence_relevance import filter_evidence_fixture
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Filter frozen historical evidence with a deterministic, label-blind lexical relevance rule."
+            "Filter frozen historical evidence with a deterministic, label-blind "
+            "lexical relevance rule."
         )
     )
     parser.add_argument("benchmark_csv", type=Path)
