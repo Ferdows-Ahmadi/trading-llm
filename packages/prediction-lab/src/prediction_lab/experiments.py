@@ -204,6 +204,12 @@ def run_development_experiment(
         validation_fraction=validation_fraction,
         parent_group_column=config.parent_group_column,
     )
+    if evaluation_cases.empty:
+        raise ResearchContractError("Experiment selection produced no evaluation cases")
+
+    earliest_forecast = evaluation_cases["forecasted_at"].min()
+    adapter.metadata.assert_safe_for_historical_scoring(earliest_forecast.to_pydatetime())
+
     output_root = Path(output_directory)
     cache = FilesystemForecastCache(output_root / "cache")
     code_commit = _git_commit(
@@ -213,6 +219,7 @@ def run_development_experiment(
     successes: list[tuple[pd.Series, ForecastArtifact]] = []
     failures: list[dict[str, object]] = []
     artifact_records: list[dict[str, str]] = []
+    evidence_records: list[dict[str, str]] = []
     ordered = evaluation_cases.sort_values(["forecasted_at", "question_id"])
     for _, row in ordered.iterrows():
         question_id = str(row["question_id"])
@@ -233,6 +240,9 @@ def run_development_experiment(
             write_immutable_json(
                 output_root / "evidence" / f"{packet.packet_hash}.json",
                 packet.to_dict(),
+            )
+            evidence_records.append(
+                {"packet_hash": packet.packet_hash, "question_id": question_id}
             )
             artifact, _cache_hit = forecast_question(
                 experiment_id=config.experiment_id,
@@ -293,7 +303,13 @@ def run_development_experiment(
         evaluation_cases["resolved_at"] - evaluation_cases["forecasted_at"]
     ).dt.total_seconds() / 86400.0
     run_identity_hash = content_hash(
-        {"code_commit": code_commit, "experiment_config_hash": config.config_hash}
+        {
+            "code_commit": code_commit,
+            "evidence_packets": evidence_records,
+            "evidence_provider": type(evidence_provider).__name__,
+            "experiment_config_hash": config.config_hash,
+            "model_metadata": adapter.metadata.to_dict(),
+        }
     )
     summary: dict[str, Any] = {
         "artifact_records": artifact_records,
@@ -336,6 +352,7 @@ def run_development_experiment(
         "schema_version": 1,
         "source_manifest": manifest,
     }
-    report_path = output_root / "reports" / f"{run_identity_hash}.json"
+    report_content_hash = content_hash(summary)
+    report_path = output_root / "reports" / f"{report_content_hash}.json"
     write_immutable_json(report_path, summary)
     return summary, report_path
