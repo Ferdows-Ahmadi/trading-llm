@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -44,7 +45,11 @@ class CommonCrawlCapture:
     @classmethod
     def from_record(cls, crawl_id: str, record: dict[str, Any]) -> CommonCrawlCapture:
         try:
-            timestamp = pd.to_datetime(str(record["timestamp"]), format="%Y%m%d%H%M%S", utc=True)
+            timestamp = pd.to_datetime(
+                str(record["timestamp"]),
+                format="%Y%m%d%H%M%S",
+                utc=True,
+            )
             return cls(
                 crawl_id=crawl_id,
                 timestamp=timestamp,
@@ -132,18 +137,33 @@ def _clean_url(value: str) -> str | None:
         return None
     if parsed.netloc.lower().endswith("polymarket.com"):
         return None
-    return urlunparse((parsed.scheme, parsed.netloc.lower(), parsed.path or "/", "", parsed.query, ""))
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc.lower(),
+            parsed.path or "/",
+            "",
+            parsed.query,
+            "",
+        )
+    )
 
 
 def extract_reference_urls(market: dict[str, Any]) -> list[str]:
     """Extract locator URLs from frozen Polymarket metadata without using it as evidence."""
-    text_fields = [str(market.get("description") or ""), str(market.get("resolutionSource") or "")]
+    text_fields = [
+        str(market.get("description") or ""),
+        str(market.get("resolutionSource") or ""),
+    ]
     events = market.get("events")
     if isinstance(events, list):
         for event in events:
             if isinstance(event, dict):
                 text_fields.extend(
-                    [str(event.get("description") or ""), str(event.get("resolutionSource") or "")]
+                    [
+                        str(event.get("description") or ""),
+                        str(event.get("resolutionSource") or ""),
+                    ]
                 )
 
     urls: list[str] = []
@@ -160,14 +180,24 @@ def select_parent_event_pilot(cases: pd.DataFrame, *, size: int = 20) -> pd.Data
     """Choose time-spread representatives without consulting outcomes or market probabilities."""
     if size < 1:
         raise ValueError("size must be positive")
-    required = {"question_id", "question_text", "forecasted_at", "source_cutoff_at", "event_id"}
+    required = {
+        "question_id",
+        "question_text",
+        "forecasted_at",
+        "source_cutoff_at",
+        "event_id",
+    }
     missing = sorted(required - set(cases.columns))
     if missing:
         raise HistoricalEvidenceError(f"Development dataset is missing columns: {missing}")
 
     safe = cases[list(required)].copy()
-    safe["forecasted_at"] = pd.to_datetime(safe["forecasted_at"], utc=True, errors="raise")
-    safe["source_cutoff_at"] = pd.to_datetime(safe["source_cutoff_at"], utc=True, errors="raise")
+    safe["forecasted_at"] = pd.to_datetime(
+        safe["forecasted_at"], utc=True, errors="raise"
+    )
+    safe["source_cutoff_at"] = pd.to_datetime(
+        safe["source_cutoff_at"], utc=True, errors="raise"
+    )
     safe.sort_values(["forecasted_at", "question_id"], inplace=True)
     representatives = safe.drop_duplicates("event_id", keep="first").reset_index(drop=True)
     if len(representatives) <= size:
@@ -179,7 +209,9 @@ def select_parent_event_pilot(cases: pd.DataFrame, *, size: int = 20) -> pd.Data
 def load_market_records(path: str | Path) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     source = Path(path)
-    for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(
+        source.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if not line.strip():
             continue
         try:
@@ -227,11 +259,20 @@ class CommonCrawlClient:
         data_url: str = COMMON_CRAWL_DATA,
         timeout_seconds: float = 30.0,
         user_agent: str = "trading-prediction-lab/0.1 historical-evidence-research",
+        retries: int = 4,
+        retry_backoff_seconds: float = 0.5,
     ) -> None:
+        if retries < 1:
+            raise ValueError("retries must be at least 1")
         self.index_url = index_url.rstrip("/")
         self.data_url = data_url.rstrip("/")
+        self.retries = retries
+        self.retry_backoff_seconds = retry_backoff_seconds
         self._owns_client = client is None
-        self._client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=True)
+        self._client = client or httpx.Client(
+            timeout=timeout_seconds,
+            follow_redirects=True,
+        )
         self._headers = {"User-Agent": user_agent}
         self._collections: list[dict[str, Any]] | None = None
 
@@ -245,19 +286,51 @@ class CommonCrawlClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    def _get(
+        self,
+        url: str,
+        *,
+        params: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        last_response: httpx.Response | None = None
+        for attempt in range(self.retries):
+            try:
+                response = self._client.get(url, params=params, headers=headers)
+                last_response = response
+                if response.status_code != 429 and response.status_code < 500:
+                    return response
+            except httpx.HTTPError as exc:
+                last_error = exc
+            if attempt + 1 < self.retries:
+                time.sleep(self.retry_backoff_seconds * (2**attempt))
+
+        if last_response is not None:
+            return last_response
+        raise HistoricalEvidenceError(f"Common Crawl request failed: {last_error}")
+
     def collections(self) -> list[dict[str, Any]]:
         if self._collections is not None:
             return self._collections
-        response = self._client.get(f"{self.index_url}/collinfo.json", headers=self._headers)
+        response = self._get(
+            f"{self.index_url}/collinfo.json",
+            headers=self._headers,
+        )
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, list):
             raise HistoricalEvidenceError("Common Crawl collection index must be a list")
-        self._collections = [item for item in payload if isinstance(item, dict) and item.get("id")]
+        self._collections = [
+            item for item in payload if isinstance(item, dict) and item.get("id")
+        ]
         return self._collections
 
     def _eligible_collections(
-        self, cutoff: pd.Timestamp, *, max_collections: int
+        self,
+        cutoff: pd.Timestamp,
+        *,
+        max_collections: int,
     ) -> list[dict[str, Any]]:
         eligible: list[tuple[pd.Timestamp, dict[str, Any]]] = []
         for item in self.collections():
@@ -278,11 +351,17 @@ class CommonCrawlClient:
     ) -> CommonCrawlCapture | None:
         cutoff_at = _utc_timestamp(cutoff, field="capture cutoff")
         candidates: list[CommonCrawlCapture] = []
-        for collection in self._eligible_collections(cutoff_at, max_collections=max_collections):
+        for collection in self._eligible_collections(
+            cutoff_at,
+            max_collections=max_collections,
+        ):
             crawl_id = str(collection["id"])
-            endpoint = str(collection.get("cdx-api") or f"{self.index_url}/{crawl_id}-index")
+            endpoint = str(
+                collection.get("cdx-api")
+                or f"{self.index_url}/{crawl_id}-index"
+            )
             for variant in _url_variants(url):
-                response = self._client.get(
+                response = self._get(
                     endpoint,
                     params={"url": variant, "output": "json"},
                     headers=self._headers,
@@ -324,7 +403,7 @@ class CommonCrawlClient:
             raise ValueError("max_characters must be at least 500")
         start = capture.offset
         end = capture.offset + capture.length - 1
-        response = self._client.get(
+        response = self._get(
             f"{self.data_url}/{capture.filename}",
             headers={**self._headers, "Range": f"bytes={start}-{end}"},
         )
@@ -340,15 +419,15 @@ class CommonCrawlClient:
                     content = record.content_stream().read()
                     break
         except Exception as exc:
-            raise HistoricalEvidenceError("Could not parse Common Crawl WARC record") from exc
+            raise HistoricalEvidenceError(
+                "Could not parse Common Crawl WARC record"
+            ) from exc
         if not content:
-            raise HistoricalEvidenceError("Common Crawl WARC record contained no response body")
+            raise HistoricalEvidenceError(
+                "Common Crawl WARC record contained no response body"
+            )
 
-        encoding = "utf-8"
-        try:
-            html = content.decode(encoding, errors="replace")
-        except LookupError as exc:
-            raise HistoricalEvidenceError("Unsupported archived page encoding") from exc
+        html = content.decode("utf-8", errors="replace")
         parser = _VisibleTextParser()
         parser.feed(html)
         text = parser.visible_text()
@@ -389,7 +468,9 @@ def build_commoncrawl_pilot(
         cutoff = _utc_timestamp(row.source_cutoff_at, field="source_cutoff_at")
         market = markets.get(question_id)
         if market is None:
-            raise HistoricalEvidenceError(f"Frozen source market missing question {question_id}")
+            raise HistoricalEvidenceError(
+                f"Frozen source market missing question {question_id}"
+            )
 
         reference_urls = extract_reference_urls(market)[:max_reference_urls]
         evidence: list[EvidenceItem] = []
@@ -398,11 +479,15 @@ def build_commoncrawl_pilot(
         for reference_url in reference_urls:
             if len(evidence) >= max_evidence_items:
                 break
-            capture = client.latest_capture_before(
-                reference_url,
-                cutoff=cutoff,
-                max_collections=max_collections,
-            )
+            try:
+                capture = client.latest_capture_before(
+                    reference_url,
+                    cutoff=cutoff,
+                    max_collections=max_collections,
+                )
+            except (HistoricalEvidenceError, httpx.HTTPError) as exc:
+                errors.append(f"lookup {reference_url}: {exc}")
+                continue
             if capture is None or capture.digest in seen_digests:
                 continue
             try:
@@ -410,11 +495,13 @@ def build_commoncrawl_pilot(
                     capture,
                     max_characters=max_characters_per_item,
                 )
-            except HistoricalEvidenceError as exc:
-                errors.append(str(exc))
+            except (HistoricalEvidenceError, httpx.HTTPError) as exc:
+                errors.append(f"fetch {reference_url}: {exc}")
                 continue
             if capture.timestamp > cutoff:
-                raise HistoricalEvidenceError("Common Crawl returned post-cutoff evidence")
+                raise HistoricalEvidenceError(
+                    "Common Crawl returned post-cutoff evidence"
+                )
 
             seen_digests.add(capture.digest)
             domains[urlparse(capture.url).netloc.lower()] += 1
@@ -435,17 +522,24 @@ def build_commoncrawl_pilot(
             )
 
         questions[question_id] = [item.to_dict() for item in evidence]
-        latest_capture = max((item.available_at for item in evidence), default=None)
+        latest_capture = max(
+            (item.available_at for item in evidence),
+            default=None,
+        )
         age_hours = (
             (cutoff.to_pydatetime() - latest_capture).total_seconds() / 3600.0
             if latest_capture is not None
             else None
         )
+        forecasted_at = _utc_timestamp(
+            row.forecasted_at,
+            field="forecasted_at",
+        ).isoformat()
         audit_rows.append(
             {
                 "question_id": question_id,
                 "question_text": str(row.question_text),
-                "forecasted_at": _utc_timestamp(row.forecasted_at, field="forecasted_at").isoformat(),
+                "forecasted_at": forecasted_at,
                 "event_id": str(row.event_id),
                 "reference_url_count": len(reference_urls),
                 "evidence_item_count": len(evidence),
@@ -457,7 +551,10 @@ def build_commoncrawl_pilot(
     audit = pd.DataFrame(audit_rows)
     covered = int((audit["evidence_item_count"] > 0).sum())
     with_urls = int((audit["reference_url_count"] > 0).sum())
-    ages = pd.to_numeric(audit["latest_evidence_age_hours"], errors="coerce").dropna()
+    ages = pd.to_numeric(
+        audit["latest_evidence_age_hours"],
+        errors="coerce",
+    ).dropna()
     summary: dict[str, object] = {
         "schema_version": 1,
         "pilot_size": len(audit),
@@ -467,8 +564,11 @@ def build_commoncrawl_pilot(
         "coverage_rate": covered / len(audit) if len(audit) else 0.0,
         "total_evidence_items": int(audit["evidence_item_count"].sum()),
         "zero_evidence_question_ids": audit.loc[
-            audit["evidence_item_count"] == 0, "question_id"
-        ].astype(str).tolist(),
+            audit["evidence_item_count"] == 0,
+            "question_id",
+        ]
+        .astype(str)
+        .tolist(),
         "source_domains": dict(sorted(domains.items())),
         "latest_evidence_age_hours": {
             "min": float(ages.min()) if not ages.empty else None,
@@ -477,9 +577,12 @@ def build_commoncrawl_pilot(
         },
         "selection_policy": (
             "time-spread first representative from each parent event; selection uses only "
-            "question_id, question_text, forecasted_at, source_cutoff_at, event_id; outcomes and "
-            "market probabilities are not consulted"
+            "question_id, question_text, forecasted_at, source_cutoff_at, event_id; "
+            "outcomes and market probabilities are not consulted"
         ),
     }
-    fixture: dict[str, object] = {"schema_version": 1, "questions": questions}
+    fixture: dict[str, object] = {
+        "schema_version": 1,
+        "questions": questions,
+    }
     return fixture, summary, audit
