@@ -30,96 +30,44 @@ jobs:
       - name: Install prediction lab
         run: python -m pip install -e "./packages/prediction-lab[dev]"
 
-      - name: Diagnose real Kalshi history shape
+      - name: Diagnose deeper historical pages
         run: |
           python - <<'PY'
           import httpx
           import pandas as pd
 
           base = "https://external-api.kalshi.com/trade-api/v2"
+          cursor = None
+          total_long = 0
           with httpx.Client(timeout=30.0) as client:
-              cutoffs = client.get(f"{base}/historical/cutoff").json()
-              recent = client.get(
-                  f"{base}/markets",
-                  params={"status": "settled", "limit": 1000, "mve_filter": "exclude"},
-              ).json().get("markets", [])
-              historical = client.get(
-                  f"{base}/historical/markets",
-                  params={"limit": 1000, "mve_filter": "exclude"},
-              ).json().get("markets", [])
-
-              def usable(market):
-                  try:
-                      volume = float(market.get("volume_fp", market.get("volume", 0)) or 0)
-                  except (TypeError, ValueError):
-                      volume = 0.0
-                  return (
-                      market.get("ticker")
-                      and market.get("title")
-                      and str(market.get("market_type", "binary")).lower() == "binary"
-                      and str(market.get("result", "")).lower() in {"yes", "no"}
-                      and market.get("close_time")
-                      and volume >= 100
-                      and not bool(market.get("is_provisional", False))
-                  )
-
-              recent_usable = [m for m in recent if usable(m)]
-              historical_usable = [m for m in historical if usable(m)]
-              print("cutoffs:", cutoffs)
-              print("recent raw/usable:", len(recent), len(recent_usable))
-              print("historical raw/usable:", len(historical), len(historical_usable))
-
-              def duration_days(market):
-                  if not market.get("open_time") or not market.get("close_time"):
-                      return None
-                  return (
-                      pd.Timestamp(market["close_time"]) - pd.Timestamp(market["open_time"])
-                  ).total_seconds() / 86400.0
-
-              recent_durations = [duration_days(m) for m in recent_usable]
-              recent_durations = [d for d in recent_durations if d is not None]
-              historical_durations = [duration_days(m) for m in historical_usable]
-              historical_durations = [d for d in historical_durations if d is not None]
-              if recent_durations:
+              for page_number in range(1, 11):
+                  params = {"limit": 1000, "mve_filter": "exclude"}
+                  if cursor:
+                      params["cursor"] = cursor
+                  payload = client.get(f"{base}/historical/markets", params=params).json()
+                  markets = payload.get("markets", [])
+                  long_markets = []
+                  durations = []
+                  for market in markets:
+                      if not market.get("open_time") or not market.get("close_time"):
+                          continue
+                      duration = (
+                          pd.Timestamp(market["close_time"])
+                          - pd.Timestamp(market["open_time"])
+                      ).total_seconds() / 86400.0
+                      durations.append(duration)
+                      if duration >= 7:
+                          long_markets.append(market)
+                  total_long += len(long_markets)
                   print(
-                      "recent duration days min/median/max:",
-                      min(recent_durations),
-                      pd.Series(recent_durations).median(),
-                      max(recent_durations),
+                      f"historical page {page_number}: raw={len(markets)} "
+                      f"long>=7d={len(long_markets)} "
+                      f"max_days={max(durations) if durations else None}"
                   )
-                  print("recent markets open >=7d:", sum(d >= 7 for d in recent_durations))
-              if historical_durations:
-                  print(
-                      "historical duration days min/median/max:",
-                      min(historical_durations),
-                      pd.Series(historical_durations).median(),
-                      max(historical_durations),
-                  )
-                  print("historical markets open >=7d:", sum(d >= 7 for d in historical_durations))
-
-              sample = next(
-                  (m for m in historical_usable if (duration_days(m) or 0) >= 8),
-                  None,
-              )
-              if sample:
-                  target = pd.Timestamp(sample["close_time"]) - pd.Timedelta(days=7)
-                  response = client.get(
-                      f"{base}/historical/trades",
-                      params={
-                          "ticker": sample["ticker"],
-                          "max_ts": int(target.timestamp()),
-                          "limit": 3,
-                      },
-                  )
-                  print("sample historical ticker:", sample["ticker"])
-                  print("sample open/close:", sample.get("open_time"), sample.get("close_time"))
-                  print("sample target:", target.isoformat())
-                  print("sample trade HTTP:", response.status_code)
-                  payload = response.json()
-                  print("sample trades returned:", len(payload.get("trades", [])))
-                  if payload.get("trades"):
-                      print("sample trade keys:", sorted(payload["trades"][0].keys()))
-                      print("sample first trade:", payload["trades"][0])
+                  cursor = payload.get("cursor") or None
+                  if not cursor:
+                      break
+              print("long-duration markets found in first pages:", total_long)
           PY
 
       - name: Fetch and freeze public Kalshi benchmark
@@ -130,7 +78,7 @@ jobs:
             --minimum-lead 7D \
             --minimum-volume 100 \
             --holdout-fraction 0.25 \
-            --max-market-pages 8 \
+            --max-market-pages 30 \
             --max-trade-pages 3 \
             --output-dir data/prediction-lab/kalshi-public-v0.1
 
