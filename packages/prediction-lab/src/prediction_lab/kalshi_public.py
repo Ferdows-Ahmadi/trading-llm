@@ -67,15 +67,36 @@ def _volume(market: dict[str, Any]) -> float:
         return 0.0
 
 
-def _is_usable_market(market: dict[str, Any], *, minimum_volume: int) -> bool:
+def _market_open_duration(market: dict[str, Any]) -> pd.Timedelta | None:
+    if not market.get("open_time") or not market.get("close_time"):
+        return None
+    try:
+        opened = _utc_timestamp(market["open_time"], field="open_time")
+        closed = _utc_timestamp(market["close_time"], field="close_time")
+    except KalshiPublicAPIError:
+        return None
+    duration = closed - opened
+    if duration <= pd.Timedelta(0):
+        return None
+    return duration
+
+
+def _is_usable_market(
+    market: dict[str, Any],
+    *,
+    minimum_volume: int,
+    minimum_open_duration: pd.Timedelta,
+) -> bool:
     result = str(market.get("result", "")).lower()
     market_type = str(market.get("market_type", "binary")).lower()
+    duration = _market_open_duration(market)
     return (
         bool(market.get("ticker"))
         and bool(market.get("title"))
         and market_type == "binary"
         and result in {"yes", "no"}
-        and bool(market.get("close_time"))
+        and duration is not None
+        and duration >= minimum_open_duration
         and _volume(market) >= minimum_volume
         and not bool(market.get("is_provisional", False))
     )
@@ -199,44 +220,99 @@ class KalshiPublicClient:
                 break
         return items[:max_items]
 
+    def _collect_eligible_markets(
+        self,
+        path: str,
+        *,
+        params: dict[str, object],
+        minimum_volume: int,
+        minimum_open_duration: pd.Timedelta,
+        target_items: int,
+        max_pages: int,
+    ) -> list[dict[str, Any]]:
+        """Page through one market tier and retain only benchmark-eligible markets."""
+        by_ticker: dict[str, dict[str, Any]] = {}
+        cursor: str | None = None
+
+        for _ in range(max_pages):
+            page_params = dict(params)
+            page_params["limit"] = 1000
+            if cursor:
+                page_params["cursor"] = cursor
+            payload = self._get_json(path, params=page_params)
+            page = payload.get("markets", [])
+            if not isinstance(page, list):
+                raise KalshiPublicAPIError("Kalshi field 'markets' is not a list")
+
+            for market in page:
+                if not isinstance(market, dict):
+                    continue
+                if not _is_usable_market(
+                    market,
+                    minimum_volume=minimum_volume,
+                    minimum_open_duration=minimum_open_duration,
+                ):
+                    continue
+                ticker = str(market["ticker"])
+                existing = by_ticker.get(ticker)
+                if existing is None or _market_sort_time(market) > _market_sort_time(existing):
+                    by_ticker[ticker] = market
+
+            if len(by_ticker) >= target_items:
+                break
+            cursor_value = payload.get("cursor")
+            cursor = str(cursor_value) if cursor_value else None
+            if not cursor:
+                break
+
+        return sorted(by_ticker.values(), key=_market_sort_time)
+
     def fetch_candidate_markets(
         self,
         *,
         minimum_volume: int,
+        minimum_open_duration: pd.Timedelta,
         max_items: int,
-        max_pages: int = 8,
+        max_pages: int = 20,
     ) -> list[dict[str, Any]]:
-        """Collect recent settled markets, then archived markets if more are needed."""
+        """Search both current and archived tiers for long-duration settled markets."""
         if max_items < 1:
             raise ValueError("max_items must be positive")
+        if minimum_open_duration <= pd.Timedelta(0):
+            raise ValueError("minimum_open_duration must be positive")
 
-        recent = self._paged_items(
+        recent = self._collect_eligible_markets(
             "/markets",
-            key="markets",
-            params={"limit": 1000, "status": "settled", "mve_filter": "exclude"},
+            params={"status": "settled", "mve_filter": "exclude"},
+            minimum_volume=minimum_volume,
+            minimum_open_duration=minimum_open_duration,
+            target_items=max_items,
             max_pages=max_pages,
-            max_items=max_items,
         )
-        combined = recent
-        if len(combined) < max_items:
-            historical = self._paged_items(
-                "/historical/markets",
-                key="markets",
-                params={"limit": 1000, "mve_filter": "exclude"},
-                max_pages=max_pages,
-                max_items=max_items - len(combined),
-            )
-            combined = [*combined, *historical]
+        historical = self._collect_eligible_markets(
+            "/historical/markets",
+            params={"mve_filter": "exclude"},
+            minimum_volume=minimum_volume,
+            minimum_open_duration=minimum_open_duration,
+            target_items=max_items,
+            max_pages=max_pages,
+        )
 
         by_ticker: dict[str, dict[str, Any]] = {}
-        for market in combined:
-            ticker = str(market.get("ticker", ""))
-            if not ticker or not _is_usable_market(market, minimum_volume=minimum_volume):
-                continue
+        for market in [*historical, *recent]:
+            ticker = str(market["ticker"])
             existing = by_ticker.get(ticker)
             if existing is None or _market_sort_time(market) > _market_sort_time(existing):
                 by_ticker[ticker] = market
-        return sorted(by_ticker.values(), key=_market_sort_time)
+
+        ordered = sorted(by_ticker.values(), key=_market_sort_time)
+        if len(ordered) <= max_items:
+            return ordered
+
+        positions = np.linspace(0, len(ordered) - 1, num=max_items, dtype=int)
+        return ordered.iloc[positions] if isinstance(ordered, pd.DataFrame) else [
+            ordered[int(index)] for index in positions
+        ]
 
     def _trades_from_endpoint(
         self,
@@ -310,7 +386,7 @@ def collect_public_kalshi_cases(
     candidate_multiplier: int = 4,
     minimum_lead: str | pd.Timedelta = "7D",
     minimum_volume: int = 100,
-    max_market_pages: int = 8,
+    max_market_pages: int = 20,
     max_trade_pages: int = 3,
 ) -> tuple[pd.DataFrame, KalshiAcquisition, list[dict[str, Any]], list[dict[str, Any]]]:
     """Build a manageable benchmark directly from Kalshi's public endpoints."""
@@ -326,6 +402,7 @@ def collect_public_kalshi_cases(
     cutoffs = client.get_cutoffs()
     candidates = client.fetch_candidate_markets(
         minimum_volume=minimum_volume,
+        minimum_open_duration=lead,
         max_items=max_questions * candidate_multiplier,
         max_pages=max_market_pages,
     )
@@ -385,7 +462,8 @@ def collect_public_kalshi_cases(
 
     if len(case_rows) < 4:
         raise KalshiPublicAPIError(
-            f"Only {len(case_rows)} usable cases were collected from {attempted} attempts"
+            f"Only {len(case_rows)} usable cases were collected from "
+            f"{len(candidates)} long-duration candidates ({attempted} attempted)"
         )
 
     cases = normalize_case_frame(pd.DataFrame(case_rows))
