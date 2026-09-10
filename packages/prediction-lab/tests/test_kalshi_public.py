@@ -104,6 +104,7 @@ def test_collect_public_cases_builds_normalized_fixed_lead_rows() -> None:
                 "title": f"Will event {index} happen?",
                 "market_type": "binary",
                 "result": "yes" if index % 2 else "no",
+                "open_time": (close - pd.Timedelta(days=30)).isoformat(),
                 "close_time": close.isoformat(),
                 "settlement_ts": (close + pd.Timedelta(hours=2)).isoformat(),
                 "volume_fp": "500.00",
@@ -120,6 +121,8 @@ def test_collect_public_cases_builds_normalized_fixed_lead_rows() -> None:
                     "trades_created_ts": "2025-12-01T00:00:00Z",
                 }
             )
+        if path.endswith("/historical/markets"):
+            return _json_response({"markets": markets, "cursor": ""})
         if path.endswith("/markets"):
             return _json_response({"markets": markets, "cursor": ""})
         if path.endswith("/markets/trades"):
