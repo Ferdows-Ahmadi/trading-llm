@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from prediction_lab.benchmark import choose_temporal_holdout_start
-from prediction_lab.datasets import freeze_cases, temporal_question_split
+from prediction_lab.datasets import (
+    freeze_cases,
+    purged_temporal_group_split,
+    temporal_question_split,
+)
 from prediction_lab.polymarket_public import (
     PolymarketPublicClient,
     collect_public_polymarket_cases,
@@ -23,9 +27,10 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/prediction-lab/polymarket-public-v0.1"),
     )
-    parser.add_argument("--max-questions", type=int, default=300)
-    parser.add_argument("--candidate-multiplier", type=int, default=3)
+    parser.add_argument("--max-questions", type=int, default=340)
+    parser.add_argument("--candidate-multiplier", type=int, default=4)
     parser.add_argument("--minimum-lead", default="7D")
+    parser.add_argument("--maximum-price-staleness", default="3D")
     parser.add_argument("--minimum-volume", type=float, default=100.0)
     parser.add_argument("--holdout-fraction", type=float, default=0.25)
     parser.add_argument("--max-market-pages", type=int, default=12)
@@ -54,6 +59,7 @@ def main() -> None:
             max_questions=args.max_questions,
             candidate_multiplier=args.candidate_multiplier,
             minimum_lead=args.minimum_lead,
+            maximum_price_staleness=args.maximum_price_staleness,
             minimum_volume=args.minimum_volume,
             max_market_pages=args.max_market_pages,
         )
@@ -65,7 +71,19 @@ def main() -> None:
         cases,
         holdout_fraction=args.holdout_fraction,
     )
-    development, holdout = temporal_question_split(cases, holdout_start=holdout_start)
+    raw_development, raw_holdout = temporal_question_split(
+        cases,
+        holdout_start=holdout_start,
+    )
+    overlapping_event_ids = sorted(
+        set(raw_development["event_id"].astype(str))
+        & set(raw_holdout["event_id"].astype(str))
+    )
+    development, holdout = purged_temporal_group_split(
+        cases,
+        holdout_start=holdout_start,
+        group_column="event_id",
+    )
 
     source_revision = (
         "polymarket-public-api;"
@@ -73,8 +91,10 @@ def main() -> None:
     )
     selection_policy = (
         f"latest public trade at least {args.minimum_lead} before actual closedTime; "
+        f"maximum_price_staleness={args.maximum_price_staleness}; "
         f"minimum_volume={args.minimum_volume}; max_questions={args.max_questions}; "
-        f"holdout_fraction={args.holdout_fraction}; holdout_start={holdout_start.isoformat()}"
+        f"holdout_fraction={args.holdout_fraction}; holdout_start={holdout_start.isoformat()}; "
+        "holdout parent events seen in development are purged"
     )
 
     manifests = {}
@@ -94,6 +114,18 @@ def main() -> None:
         "holdout_start": holdout_start.isoformat(),
         "development_rows": len(development),
         "holdout_rows": len(holdout),
+        "raw_holdout_rows_before_event_purge": len(raw_holdout),
+        "purged_holdout_rows": len(raw_holdout) - len(holdout),
+        "purged_event_groups": len(overlapping_event_ids),
+        "development_event_groups": development["event_id"].nunique(),
+        "holdout_event_groups": holdout["event_id"].nunique(),
+        "event_overlap_after_purge": len(
+            set(development["event_id"].astype(str))
+            & set(holdout["event_id"].astype(str))
+        ),
+        "max_snapshot_staleness_hours": float(
+            max(development["snapshot_staleness_hours"].max(), holdout["snapshot_staleness_hours"].max())
+        ),
         "raw_source_hashes": {
             "source-markets.jsonl": markets_sha,
             "source-trades.jsonl": trades_sha,
