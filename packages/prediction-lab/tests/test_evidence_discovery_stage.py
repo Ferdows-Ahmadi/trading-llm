@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from prediction_lab.commoncrawl_evidence import HistoricalEvidenceError
 from prediction_lab.datasets import freeze_cases
 from prediction_lab.evidence_discovery_stage import run_gdelt_discovery_stage
 from prediction_lab.gdelt_evidence import GdeltArticle
@@ -24,6 +25,36 @@ class FakeDiscovery:
     ) -> list[GdeltArticle]:
         del lookback_days, max_records
         self.calls += 1
+        return [
+            GdeltArticle(
+                title=f"Historical reporting for {question_text}",
+                url=f"https://example.com/{self.calls}",
+                seen_at=cutoff - pd.Timedelta(hours=1),
+                domain="example.com",
+                language="English",
+                source_country="United States",
+            )
+        ]
+
+
+@dataclass
+class FlakyDiscovery:
+    calls: int = 0
+    failed_once: bool = False
+
+    def search(
+        self,
+        question_text: str,
+        *,
+        cutoff: pd.Timestamp,
+        lookback_days: int,
+        max_records: int,
+    ) -> list[GdeltArticle]:
+        del lookback_days, max_records
+        self.calls += 1
+        if "event 0" in question_text and not self.failed_once:
+            self.failed_once = True
+            raise HistoricalEvidenceError("transient HTTP 429")
         return [
             GdeltArticle(
                 title=f"Historical reporting for {question_text}",
@@ -85,6 +116,7 @@ def test_discovery_stage_reuses_atomic_question_checkpoints(tmp_path: Path) -> N
     assert provider.calls == 4
     assert first_summary["questions_with_results"] == 4
     assert first_summary["reused_checkpoints"] == 0
+    assert first_summary["retried_failed_checkpoints"] == 0
     assert len(first_audit) == 4
 
     second_summary, second_audit = run_gdelt_discovery_stage(
@@ -99,5 +131,42 @@ def test_discovery_stage_reuses_atomic_question_checkpoints(tmp_path: Path) -> N
     assert provider.calls == 4
     assert second_summary["attempted_this_run"] == 0
     assert second_summary["reused_checkpoints"] == 4
+    assert second_summary["retried_failed_checkpoints"] == 0
     assert second_audit.equals(first_audit)
     assert (output / "discovery.jsonl").exists()
+
+
+def test_discovery_stage_retries_failed_checkpoints_only(tmp_path: Path) -> None:
+    csv_path, manifest_path = _freeze_development(tmp_path)
+    output = tmp_path / "discovery"
+    provider = FlakyDiscovery()
+
+    first_summary, _ = run_gdelt_discovery_stage(
+        development_csv=csv_path,
+        development_manifest=manifest_path,
+        output_directory=output,
+        discovery=provider,
+        pilot_size=4,
+        lookback_days=30,
+        max_records=5,
+    )
+    assert provider.calls == 4
+    assert first_summary["provider_failures"] == 1
+    assert first_summary["questions_with_results"] == 3
+
+    second_summary, second_audit = run_gdelt_discovery_stage(
+        development_csv=csv_path,
+        development_manifest=manifest_path,
+        output_directory=output,
+        discovery=provider,
+        pilot_size=4,
+        lookback_days=30,
+        max_records=5,
+    )
+    assert provider.calls == 5
+    assert second_summary["attempted_this_run"] == 1
+    assert second_summary["reused_checkpoints"] == 3
+    assert second_summary["retried_failed_checkpoints"] == 1
+    assert second_summary["provider_failures"] == 0
+    assert second_summary["questions_with_results"] == 4
+    assert second_audit["error"].eq("").all()
