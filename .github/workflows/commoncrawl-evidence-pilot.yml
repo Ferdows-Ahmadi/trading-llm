@@ -57,6 +57,9 @@ jobs:
           print("holdout files removed before evidence construction")
           PY
 
+      # Common Crawl occasionally returns transient 5xx responses. The client now
+      # retries them and records an exhausted URL as a retrieval error instead of
+      # silently treating service failure as evidence absence.
       - name: Build 20-parent-event Common Crawl evidence pilot
         run: |
           prediction-lab-evidence-pilot \
