@@ -54,6 +54,11 @@ def _same_exact_page(requested_url: str, captured_url: str) -> bool:
     return True
 
 
+def _response_excerpt(response: httpx.Response, *, limit: int = 180) -> str:
+    text = " ".join(response.text.split())
+    return text[:limit]
+
+
 class CaptureIndexCommonCrawlClient(CommonCrawlClient):
     """Rate-aware Common Crawl CDX client for exact pre-cutoff capture discovery."""
 
@@ -167,9 +172,15 @@ class CaptureIndexCommonCrawlClient(CommonCrawlClient):
             if response.status_code == 404:
                 continue
             if response.status_code >= 400:
-                raise HistoricalEvidenceError(
-                    f"Common Crawl index returned HTTP {response.status_code}"
+                # A provider/client response makes this collection inconclusive, but one
+                # bad collection must not abort the entire resumable evidence run. Keep it
+                # retryable and auditable unless another collection returns a valid capture.
+                detail = _response_excerpt(response)
+                suffix = f": {detail}" if detail else ""
+                transport_errors.append(
+                    f"{crawl_id}: Common Crawl index HTTP {response.status_code}{suffix}"
                 )
+                continue
 
             valid: list[CommonCrawlCapture] = []
             for line in response.text.splitlines():
