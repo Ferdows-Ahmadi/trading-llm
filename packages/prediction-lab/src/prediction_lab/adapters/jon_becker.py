@@ -67,9 +67,9 @@ def _first_available_timestamp(row: pd.Series, columns: tuple[str, ...]) -> obje
 
 
 def _resolution_observed_at(row: pd.Series) -> object:
-    # _fetched_at is preferred because it is the conservative point at which the
-    # resolved result is known to have existed in the upstream dataset.
-    return _first_available_timestamp(row, ("_fetched_at", "close_time", "end_date"))
+    # Prefer the market's own close/end boundary. A much later metadata fetch could
+    # otherwise make a supposedly seven-day-ahead snapshot much closer to the event.
+    return _first_available_timestamp(row, ("close_time", "end_date", "_fetched_at"))
 
 
 def build_kalshi_trade_cases(
@@ -391,7 +391,7 @@ def sample_latest_before_resolution(
 
     This prevents highly traded questions from dominating a benchmark simply because
     they produced more trades. For example, a seven-day lead samples the last available
-    price no later than seven days before the conservatively observed resolution time.
+    price no later than seven days before the conservative resolution boundary.
     """
 
     normalized = normalize_case_frame(cases)
