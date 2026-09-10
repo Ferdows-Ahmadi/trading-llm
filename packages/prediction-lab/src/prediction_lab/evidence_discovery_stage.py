@@ -58,8 +58,9 @@ def run_gdelt_discovery_stage(
     """Run a development-only, resumable GDELT discovery pilot.
 
     Each question is checkpointed atomically as soon as its discovery attempt finishes.
-    Re-running the stage reuses completed question checkpoints and never consults
-    outcomes or market probabilities for selection or search construction.
+    Successful checkpoints are reused. Failed checkpoints are retried and atomically
+    replaced so transient provider errors do not become permanently cached failures.
+    Selection and search construction never consult outcomes or market probabilities.
     """
 
     if pilot_size < 1:
@@ -84,15 +85,20 @@ def run_gdelt_discovery_stage(
 
     records: list[dict[str, object]] = []
     reused = 0
+    retried_failed = 0
     attempted = 0
 
     for row in pilot.itertuples(index=False):
         question_id = str(row.question_id)
         checkpoint = checkpoints / _checkpoint_name(question_id)
         if checkpoint.exists():
-            records.append(json.loads(checkpoint.read_text(encoding="utf-8")))
-            reused += 1
-            continue
+            cached = json.loads(checkpoint.read_text(encoding="utf-8"))
+            cached_error = str(cached.get("error") or "").strip()
+            if not cached_error:
+                records.append(cached)
+                reused += 1
+                continue
+            retried_failed += 1
 
         attempted += 1
         cutoff = pd.Timestamp(row.source_cutoff_at)
@@ -155,6 +161,7 @@ def run_gdelt_discovery_stage(
         "total_articles": total_articles,
         "attempted_this_run": attempted,
         "reused_checkpoints": reused,
+        "retried_failed_checkpoints": retried_failed,
         "lookback_days": lookback_days,
         "max_records": max_records,
     }
