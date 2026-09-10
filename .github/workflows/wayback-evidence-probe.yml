@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Kept separate from benchmark construction: this only probes archive reachability.
       - name: Probe pre-cutoff captures
         run: |
           python - <<'PY'
