@@ -11,7 +11,10 @@ market probabilities.
    with the market probability observed at the same decision timestamp.
 2. **No future information.** Research sources, prices, resolutions, labels, cached
    summaries, memories, and derived features must not contain information newer than
-   the forecast timestamp.
+   the forecast timestamp. Persisted operational provenance may contain later metadata
+   such as `retrieved_at`, current archive URIs, or content hashes, but that metadata
+   must not be exposed to a historical forecasting model. Model-facing evidence should
+   contain only information that was actually available by the historical cutoff.
 3. **Model weights count as information.** A historical scored forecast may not use a
    model whose training/release window can contain the event outcome. For historical
    evaluation, use a frozen model with a defensible pre-forecast knowledge cutoff.
