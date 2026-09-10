@@ -97,6 +97,32 @@ class DeterministicFakeModelAdapter:
         }
 
 
+def _model_facing_evidence(evidence_packet: EvidencePacket) -> dict[str, object]:
+    """Project persisted evidence into a historical-safe model input.
+
+    Operational provenance such as retrieval time, archive URI, content hashes, and
+    packet hashes is retained in persisted artifacts but never shown to the model.
+    Those fields can reveal post-forecast context without contributing evidence that
+    was actually available at historical time T.
+    """
+
+    return {
+        "evidence_items": [
+            {
+                "available_at": format_utc(item.available_at),
+                "source_id": item.source_id,
+                "source_type": item.source_type,
+                "text": item.text,
+                "title": item.title,
+            }
+            for item in evidence_packet.evidence_items
+        ],
+        "forecasted_at": format_utc(evidence_packet.forecasted_at),
+        "question_id": evidence_packet.question_id,
+        "research_cutoff_at": format_utc(evidence_packet.research_cutoff_at),
+    }
+
+
 def build_model_request(
     *,
     question_id: str,
@@ -106,7 +132,7 @@ def build_model_request(
     mode: ForecastMode,
     market_probability: float | None,
 ) -> dict[str, object]:
-    """Build the complete adapter request without labels or resolution observations."""
+    """Build the adapter request without labels, resolutions, or future metadata."""
 
     if mode == "blind" and market_probability is not None:
         raise ResearchContractError("Blind requests cannot include market_probability")
@@ -120,7 +146,7 @@ def build_model_request(
     ):
         raise ResearchContractError("market_probability must be finite and within [0, 1]")
     request: dict[str, object] = {
-        "evidence": evidence_packet.to_dict(),
+        "evidence": _model_facing_evidence(evidence_packet),
         "instructions": {
             "output_fields": [
                 "base_rate_probability",
