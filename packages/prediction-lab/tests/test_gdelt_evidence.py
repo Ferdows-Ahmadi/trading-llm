@@ -8,10 +8,10 @@ from prediction_lab.gdelt_evidence import GdeltDocClient, build_gdelt_query
 
 def test_build_gdelt_query_uses_question_terms_only() -> None:
     query = build_gdelt_query("Will Bitcoin close above $100,000 before December 2025?")
-    assert "Bitcoin" in query
-    assert "100" in query
-    assert "December" in query
+    assert query == "Bitcoin"
     assert "will" not in query.lower()
+    assert "100" not in query
+    assert "December" not in query
 
 
 def test_gdelt_search_discards_post_cutoff_results() -> None:
