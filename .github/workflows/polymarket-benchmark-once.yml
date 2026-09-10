@@ -28,7 +28,7 @@ jobs:
       - name: Install probe dependencies
         run: python -m pip install httpx pandas
 
-      - name: Probe Polymarket public history
+      - name: Probe actual Polymarket closure history
         run: |
           python - <<'PY'
           import json
@@ -37,6 +37,26 @@ jobs:
 
           gamma = "https://gamma-api.polymarket.com"
           data = "https://data-api.polymarket.com"
+
+          def resolved_binary(market):
+              try:
+                  outcomes = json.loads(market.get("outcomes") or "[]")
+                  prices = [
+                      float(value)
+                      for value in json.loads(market.get("outcomePrices") or "[]")
+                  ]
+              except (TypeError, ValueError, json.JSONDecodeError):
+                  return False
+              names = [str(value).strip().lower() for value in outcomes]
+              if len(names) != 2 or set(names) != {"yes", "no"} or len(prices) != 2:
+                  return False
+              yes_index = names.index("yes")
+              no_index = names.index("no")
+              return (
+                  prices[yes_index] >= 0.99 and prices[no_index] <= 0.01
+              ) or (
+                  prices[yes_index] <= 0.01 and prices[no_index] >= 0.99
+              )
 
           with httpx.Client(timeout=30.0) as client:
               response = client.get(
@@ -54,53 +74,71 @@ jobs:
               markets = payload.get("markets", [])
               print("markets returned:", len(markets))
               print("next_cursor present:", bool(payload.get("next_cursor")))
+              if markets:
+                  interesting = [
+                      key
+                      for key in (
+                          "id",
+                          "question",
+                          "startDate",
+                          "endDate",
+                          "closedTime",
+                          "updatedAt",
+                          "umaEndDate",
+                          "conditionId",
+                          "closed",
+                          "outcomes",
+                          "outcomePrices",
+                      )
+                      if key in markets[0]
+                  ]
+                  print("relevant fields present:", interesting)
 
-              long_markets = []
-              resolved_binary = []
+              closure_present = 0
+              actual_long = []
+              schedule_gap_days = []
               for market in markets:
                   start_value = market.get("startDate") or market.get("createdAt")
-                  end_value = market.get("endDate")
-                  if not start_value or not end_value:
+                  close_value = market.get("closedTime")
+                  if not start_value or not close_value:
                       continue
+                  closure_present += 1
                   start = pd.Timestamp(start_value)
-                  end = pd.Timestamp(end_value)
-                  duration_days = (end - start).total_seconds() / 86400.0
-                  if duration_days < 7:
-                      continue
-                  long_markets.append((duration_days, market))
+                  closed = pd.Timestamp(close_value)
+                  actual_days = (closed - start).total_seconds() / 86400.0
+                  if market.get("endDate"):
+                      scheduled_end = pd.Timestamp(market["endDate"])
+                      schedule_gap_days.append(
+                          (scheduled_end - closed).total_seconds() / 86400.0
+                      )
+                  if actual_days >= 7 and resolved_binary(market):
+                      actual_long.append((actual_days, market))
 
-                  try:
-                      outcomes = json.loads(market.get("outcomes") or "[]")
-                      prices = [float(value) for value in json.loads(market.get("outcomePrices") or "[]")]
-                  except (TypeError, ValueError, json.JSONDecodeError):
-                      continue
-                  names = [str(value).strip().lower() for value in outcomes]
-                  if len(names) != 2 or set(names) != {"yes", "no"} or len(prices) != 2:
-                      continue
-                  yes_index = names.index("yes")
-                  no_index = names.index("no")
-                  if (
-                      (prices[yes_index] >= 0.99 and prices[no_index] <= 0.01)
-                      or (prices[yes_index] <= 0.01 and prices[no_index] >= 0.99)
-                  ):
-                      resolved_binary.append((duration_days, market))
-
-              print("long >=7d:", len(long_markets))
-              print("resolved binary long >=7d:", len(resolved_binary))
-              if long_markets:
-                  durations = [item[0] for item in long_markets]
+              print("closedTime present:", closure_present, "/", len(markets))
+              print("resolved binary actual lifetime >=7d:", len(actual_long))
+              if actual_long:
+                  durations = [item[0] for item in actual_long]
                   print(
-                      "long duration min/median/max:",
+                      "actual duration min/median/max:",
                       min(durations),
                       pd.Series(durations).median(),
                       max(durations),
                   )
+              if schedule_gap_days:
+                  print(
+                      "scheduled end minus actual close median/max days:",
+                      pd.Series(schedule_gap_days).median(),
+                      max(schedule_gap_days),
+                  )
 
-              if not resolved_binary:
-                  raise RuntimeError("No resolved binary long-duration market found in probe page")
+              if not actual_long:
+                  raise RuntimeError(
+                      "No resolved binary market with >=7 actual days found in probe page"
+                  )
 
-              _, sample = resolved_binary[0]
-              target = pd.Timestamp(sample["endDate"]) - pd.Timedelta(days=7)
+              _, sample = actual_long[0]
+              actual_close = pd.Timestamp(sample["closedTime"])
+              target = actual_close - pd.Timedelta(days=7)
               condition_id = sample["conditionId"]
               trade_response = client.get(
                   f"{data}/trades",
@@ -113,29 +151,39 @@ jobs:
               )
               print("sample id:", sample.get("id"))
               print("sample question:", sample.get("question"))
-              print("sample start/end:", sample.get("startDate"), sample.get("endDate"))
-              print("sample conditionId:", condition_id)
-              print("target:", target.isoformat())
+              print("sample startDate:", sample.get("startDate"))
+              print("sample scheduled endDate:", sample.get("endDate"))
+              print("sample actual closedTime:", sample.get("closedTime"))
+              print("sample updatedAt:", sample.get("updatedAt"))
+              print("sample umaEndDate:", sample.get("umaEndDate"))
+              print("sample target:", target.isoformat())
               print("trades HTTP:", trade_response.status_code)
               trade_response.raise_for_status()
               trades = trade_response.json()
               print("trades returned:", len(trades) if isinstance(trades, list) else "not-list")
-              if isinstance(trades, list) and trades:
-                  eligible = [t for t in trades if int(t.get("timestamp", 0)) <= int(target.timestamp())]
-                  print("eligible trades:", len(eligible))
-                  latest = max(eligible, key=lambda trade: int(trade["timestamp"])) if eligible else None
-                  if latest:
-                      safe = {
-                          key: latest.get(key)
-                          for key in (
-                              "conditionId",
-                              "asset",
-                              "price",
-                              "timestamp",
-                              "outcome",
-                              "outcomeIndex",
-                              "side",
-                          )
-                      }
-                      print("latest eligible trade:", safe)
+              eligible = []
+              if isinstance(trades, list):
+                  eligible = [
+                      trade
+                      for trade in trades
+                      if int(trade.get("timestamp", 0)) <= int(target.timestamp())
+                  ]
+              print("eligible trades:", len(eligible))
+              if eligible:
+                  latest = max(eligible, key=lambda trade: int(trade["timestamp"]))
+                  safe = {
+                      key: latest.get(key)
+                      for key in (
+                          "conditionId",
+                          "asset",
+                          "price",
+                          "timestamp",
+                          "outcome",
+                          "outcomeIndex",
+                          "side",
+                      )
+                  }
+                  print("latest eligible trade:", safe)
+              else:
+                  raise RuntimeError("Sample has no trade at least seven days before actual close")
           PY
