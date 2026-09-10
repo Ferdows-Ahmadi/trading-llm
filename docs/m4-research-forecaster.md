@@ -13,8 +13,13 @@ skill and exists solely to exercise the offline pipeline.
   including questions with an intentionally empty evidence list.
 - Every evidence item needs a timezone-aware `available_at` no later than the case's
   `source_cutoff_at`. Missing or unknown availability fails closed.
+- Persisted evidence may record later operational provenance such as `retrieved_at`,
+  archive references, content hashes, and packet hashes. Those fields are intentionally
+  removed from the model-facing evidence projection so a historical model cannot infer
+  post-forecast context from research operations performed later.
 - Model metadata must explicitly assess the model as `historical-safe`, with both its
-  release date and claimed knowledge cutoff no later than the forecast timestamp.
+  release date and claimed knowledge cutoff no later than the earliest scored forecast.
+  Unsafe metadata aborts the experiment before per-question execution begins.
 - Blind requests omit market probability. Market-aware requests include only the
   sanitized contemporaneous probability, not its price timestamp.
 - Outcomes and observed resolution timestamps never enter the adapter request.
@@ -43,7 +48,8 @@ skill and exists solely to exercise the offline pipeline.
 ```
 
 `content_hash` may be included and is then verified. It is always present in the
-constructed `EvidenceItem` and persisted packet.
+constructed `EvidenceItem` and persisted packet. Operational provenance remains in the
+persisted packet even though it is excluded from the prompt-facing evidence view.
 
 ## Development experiment CLI
 
@@ -70,10 +76,12 @@ the runner evaluates only the newest inner validation segment after purging ever
 parent-event group already present in the inner development segment.
 
 The output directory contains content-addressed evidence packets, forecast cache
-entries, immutable forecast artifacts, explicit failure records, and a canonical JSON
-report keyed by the experiment configuration and code-state identity. Re-running the
-same configuration and code state resumes from cache and leaves the report
-byte-identical.
+entries, immutable forecast artifacts, explicit failure records, and canonical JSON
+reports. A stable run identity includes code state, experiment configuration, model
+metadata, evidence provider type, and the ordered evidence packet hashes. Each report
+file itself is named by the hash of its complete report payload, so retries or changed
+research inputs cannot collide with an earlier immutable report. Re-running identical
+inputs resumes from cache and produces the same report bytes and path.
 
 No command in this layer reads the frozen final holdout. A separate locked final
 evaluation boundary remains intentionally unimplemented until a defensible pre-period
