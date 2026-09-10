@@ -33,9 +33,10 @@ jobs:
       - name: Fetch and freeze public Polymarket benchmark
         run: |
           prediction-lab-fetch-polymarket \
-            --max-questions 300 \
+            --max-questions 340 \
             --candidate-multiplier 4 \
             --minimum-lead 7D \
+            --maximum-price-staleness 3D \
             --minimum-volume 100 \
             --holdout-fraction 0.25 \
             --max-market-pages 12 \
@@ -60,12 +61,19 @@ jobs:
           summary = json.loads((root / "acquisition-summary.json").read_text())
           baselines = json.loads((root / "baselines.json").read_text())
 
-          print("=== BENCHMARK SIZE ===")
+          print("=== CLEAN BENCHMARK ===")
           print("candidate_markets:", summary["acquisition"]["candidate_markets"])
           print("attempted_markets:", summary["acquisition"]["attempted_markets"])
-          print("usable_cases:", summary["acquisition"]["usable_cases"])
+          print("usable_before_split:", summary["acquisition"]["usable_cases"])
           print("development:", summary["development_rows"])
           print("holdout:", summary["holdout_rows"])
+          print("raw_holdout_before_event_purge:", summary["raw_holdout_rows_before_event_purge"])
+          print("purged_holdout_rows:", summary["purged_holdout_rows"])
+          print("purged_event_groups:", summary["purged_event_groups"])
+          print("event_overlap_after_purge:", summary["event_overlap_after_purge"])
+          print("development_event_groups:", summary["development_event_groups"])
+          print("holdout_event_groups:", summary["holdout_event_groups"])
+          print("max_snapshot_staleness_hours:", summary["max_snapshot_staleness_hours"])
           print("holdout_start:", summary["holdout_start"])
           print("=== HOLDOUT BASELINES ===")
           for name, report in baselines["reports"].items():
@@ -81,7 +89,7 @@ jobs:
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v4
         with:
-          name: polymarket-public-benchmark-v0.1
+          name: polymarket-public-benchmark-v0.1-clean
           path: data/prediction-lab/polymarket-public-v0.1/
           if-no-files-found: error
           retention-days: 14
