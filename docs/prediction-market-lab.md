@@ -2,15 +2,11 @@
 
 ## Purpose
 
-The prediction-market lane exists to answer one question before live trading work is
-allowed to begin:
+The prediction-market lane exists to answer one question before live trading work is allowed to begin:
 
-> Can our forecasting system produce genuinely out-of-sample probabilities that are
-> better than the market probabilities available at the same time?
+> Can our forecasting system produce genuinely out-of-sample probabilities that are better than the market probabilities available at the same time?
 
-The project deliberately starts with measurement rather than execution. A profitable
-looking backtest is not evidence if it uses future information, unrealistic prices,
-or a weak baseline.
+The project deliberately starts with measurement rather than execution. A profitable-looking backtest is not evidence if it uses future information, unrealistic prices, or a weak baseline.
 
 ## v0.1 architecture
 
@@ -18,10 +14,13 @@ or a weak baseline.
 historical resolved markets
           |
           v
-normalized forecast observations
+fixed-lead benchmark builder
           |
           v
-strict temporal leakage validation
+frozen development + temporal holdout
+          |
+          v
+sanitized forecaster input
           |
           v
 model probability vs market probability
@@ -37,91 +36,69 @@ No live wallet or order path belongs in this phase.
 
 ## Data contract
 
-Each row represents one forecast made at one historical decision time.
+Each case contains the historical question, a contemporaneous market probability, final binary outcome, and strict temporal cutoffs. Forecasters do not receive the final outcome or observed resolution timestamp. Blind runs can additionally hide the market probability.
 
-Required columns:
-
-| Column | Meaning |
-| --- | --- |
-| `question_id` | Stable market/question identifier |
-| `question_text` | Human-readable forecasting question |
-| `forecasted_at` | Exact timestamp when the model forecast is considered made |
-| `resolved_at` | Final resolution timestamp |
-| `market_price_timestamp` | Timestamp of the market probability used as the baseline |
-| `source_cutoff_at` | Latest timestamp allowed among research evidence supplied to the model |
-| `market_probability` | Contemporaneous market probability in `[0, 1]` |
-| `model_probability` | Forecast-system probability in `[0, 1]` |
-| `outcome` | Final binary outcome, `0` or `1` |
-
-Optional columns currently normalized by the package:
-
-- `category` (default `unknown`)
-- `model_name` (default `model`)
-- `split` (default `unspecified`)
-
-### Temporal invariants
-
-A row is rejected when any of these are true:
-
-- `market_price_timestamp > forecasted_at`
-- `source_cutoff_at > forecasted_at`
-- `resolved_at <= forecasted_at`
-- the same `question_id`, `forecasted_at`, and `model_name` appears more than once
-
-Train/test temporal validation also requires the test period to begin strictly after
-the training period ends.
+A row is rejected when the market price or research cutoff is after the forecast timestamp, when resolution is not later than the forecast, or when duplicate forecast observations are detected. Temporal holdout validation requires the holdout period to begin after development ends.
 
 ## Evaluation semantics
 
-The market is not merely another feature. It is the reference forecast we have to beat.
+The market is the reference forecast we have to beat. Primary metrics are model and market Brier score, Brier delta, Brier skill versus market, binary log loss, expected calibration error, and observation-level win rate. Reports are also sliced by category, market-probability bucket, and forecast horizon.
 
-Primary metrics:
+Negative Brier delta is better. Forecasting skill alone does not prove profitability.
 
-- model Brier score
-- market Brier score
-- Brier delta = `model_brier - market_brier`
-- Brier skill score versus the market
-- model and market binary log loss
-- expected calibration error for both
-- fraction of observations where model squared error is lower than market squared error
+## Historical source
 
-Interpretation:
+The v0.1 benchmark adapter is pinned to:
 
-- negative Brier delta is good;
-- positive Brier skill score is good;
-- neither result alone proves profitability.
+- repository: `Jon-Becker/prediction-market-analysis`
+- revision: `2276382cb616107db8c8647803bffa4a0d7091f8`
 
-Reports are also sliced by:
+The upstream archive is large and must stay outside Git. The benchmark builder accepts an explicitly extracted local `data/` directory. It does not silently download tens of gigabytes.
 
-- category
-- market-probability bucket
-- forecast horizon
+## Build the first benchmark
 
-The goal is to discover narrow regions where the system has repeatable skill, rather
-than forcing a global claim that "AI beats prediction markets."
+The bulk v0.1 builder currently targets Kalshi because the Becker schema provides direct trade timestamps and finalized outcomes. The existing Polymarket adapter remains available for smaller in-memory slices; a memory-efficient Polymarket bulk builder is deliberately deferred.
 
-## Local usage
+For each resolved Kalshi market, the builder selects the latest valid trade no later than the requested lead time before the market close. It keeps one case per question, can deterministically cap the dataset across the time span, then reserves the newest fraction as an untouched holdout.
 
 ```bash
 cd packages/prediction-lab
-python -m venv .venv
-# activate the environment for your shell
-pip install -e ".[dev]"
-pytest
-prediction-lab examples/sample_forecasts.csv
+python -m pip install -e ".[dev]"
+
+prediction-lab-build /path/to/extracted/data \
+  --minimum-lead 7D \
+  --min-volume 100 \
+  --max-questions 1000 \
+  --holdout-fraction 0.25 \
+  --output-dir data/prediction-lab/benchmark-v0.1
 ```
 
-The CLI prints a JSON evaluation report. It can also write one to disk:
+The command writes `development.csv`, `development.manifest.json`, `holdout.csv`, `holdout.manifest.json`, and `benchmark-summary.json`. Frozen datasets are SHA-256 verified before reuse.
+
+## Run deterministic baselines
+
+Before any LLM is introduced, score three controls on the untouched holdout:
+
+- the market itself;
+- constant 50%;
+- a binned calibration model fitted only on development outcomes.
 
 ```bash
-prediction-lab examples/sample_forecasts.csv --output reports/demo.json
+prediction-lab-baselines \
+  data/prediction-lab/benchmark-v0.1/development.csv \
+  data/prediction-lab/benchmark-v0.1/development.manifest.json \
+  data/prediction-lab/benchmark-v0.1/holdout.csv \
+  data/prediction-lab/benchmark-v0.1/holdout.manifest.json \
+  --output data/prediction-lab/benchmark-v0.1/baselines.json
 ```
+
+The market baseline is a scientific control. Its model Brier must equal market Brier and its Brier delta must be zero. If it ever appears to beat itself, the evaluator is broken.
 
 ## Milestones
 
 ### M0 - Evaluation foundation
 
-Status: implemented in the initial v0.1 branch.
+Status: implemented.
 
 - [x] strict forecast-row data contract
 - [x] UTC timestamp normalization
@@ -129,70 +106,79 @@ Status: implemented in the initial v0.1 branch.
 - [x] temporal holdout overlap guard
 - [x] Brier score and Brier skill score
 - [x] binary log loss
-- [x] calibration table / expected calibration error
+- [x] calibration / expected calibration error
 - [x] category, probability-bucket, and horizon slices
-- [x] CLI and sample dataset
-- [x] unit tests
+- [x] CLI, sample dataset, tests, and CI
 
-### M1 - Real historical dataset adapter
+### M1 - Real historical benchmark machinery
+
+Status: implemented; real data still needs to be run through it.
+
+- [x] Becker Kalshi Parquet bulk builder using DuckDB
+- [x] Becker Polymarket/Kalshi schema adapters
+- [x] one observation per resolved question
+- [x] fixed lead-time selection
+- [x] conservative close/end-time resolution boundary
+- [x] deterministic temporal cap and holdout cutoff
+- [x] SHA-256 frozen development/holdout manifests
+- [x] source revision and selection-policy provenance
+
+### M2 - Deterministic baselines
+
+Status: implemented.
+
+- [x] market control
+- [x] constant 50% control
+- [x] development-only binned calibration model
+- [x] baseline holdout report CLI
+
+### M3 - First real benchmark run
 
 Next target.
 
-- [ ] choose a reproducible initial slice from `prediction-market-analysis`
-- [ ] document exact source version / retrieval instructions
-- [ ] map resolved markets and historical probability snapshots into the v0.1 contract
-- [ ] add deterministic validation and duplicate handling
-- [ ] produce a frozen development dataset and a later temporal holdout
-- [ ] add tests against edge cases found in real data
+- [ ] run 300-1000 resolved markets through the builder
+- [ ] freeze the holdout before model development
+- [ ] record market, 50%, and calibration baseline results
+- [ ] inspect benchmark quality and any schema anomalies
 
-### M2 - First forecasting interface
+### M4 - First research forecaster
 
-- [ ] define a minimal forecaster protocol
-- [ ] add trivial baselines (market, 50%, category/base-rate where defensible)
-- [ ] add a structured research forecast inspired by `forecasting-tools`
-- [ ] preserve all evidence timestamps used by a forecast
-- [ ] keep model/provider concerns behind an adapter
+Only after M3 is trustworthy.
 
-### M3 - Out-of-sample benchmark
+- [ ] timestamp-bounded source retrieval
+- [ ] base-rate research
+- [ ] evidence update
+- [ ] adversarial critique
+- [ ] final probability
+- [ ] cache source/model artifacts for reproducibility
+- [ ] run blind and market-aware variants
 
-- [ ] freeze forecasting logic before final holdout evaluation
-- [ ] evaluate at least 200 resolved holdout observations before strong conclusions
-- [ ] compare directly with the same-question market baseline
-- [ ] analyze category/horizon/probability slices
-- [ ] record contamination risks and failed cases
+### M5 - Tradability gate
 
-A model that fails to beat the market is not a project failure. It is an experimental
-result that tells us not to spend money automating a nonexistent edge.
+Only if forecasting skill survives out-of-sample testing.
 
-### M4 - Tradability gate
+- [ ] executable prices rather than idealized midpoint probabilities
+- [ ] spread, fees, slippage, and liquidity
+- [ ] uncertainty and minimum-edge margins
 
-Only starts if M3 produces a repeatable forecasting edge.
+### M6 - Shadow / paper execution
 
-- [ ] use executable prices rather than idealized midpoint probabilities
-- [ ] include spread, fees, slippage, and liquidity
-- [ ] define uncertainty and minimum-edge margins
-- [ ] evaluate whether forecasting skill survives trading costs
-
-### M5 - Shadow / paper execution
-
-Only after M4.
+Only after M5.
 
 - [ ] evaluate NautilusTrader integration
 - [ ] deterministic risk limits
 - [ ] shadow mode before funded accounts
 - [ ] reconcile forecasts, proposed trades, fills, and outcomes
 
-## Explicitly deferred
+## Codex handoff rule
 
-Until the evidence justifies them, do not spend engineering time on:
+Do not spend Codex credits on deterministic benchmark plumbing. Codex becomes useful when the pipeline below is proven on real data:
 
-- TradingAgents orchestration
-- cross-venue arbitrage / Pytheum integration
-- market-making / `hftbacktest`
-- autonomous long-term memory
-- LLM routing infrastructure
-- funded Polymarket or Kalshi accounts
-- VPS deployment
+```text
+historical source
+  -> frozen development/holdout
+  -> deterministic baselines
+  -> trusted evaluation report
+```
 
-Those are possible later components, not prerequisites for discovering whether an edge
-exists.
+The first genuinely Codex-worthy task is the timestamp-bounded research/LLM forecasting pipeline at scale.
