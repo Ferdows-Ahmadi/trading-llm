@@ -27,6 +27,7 @@ class PolymarketAcquisition:
     attempted_markets: int
     usable_cases: int
     minimum_lead: str
+    maximum_price_staleness: str
     minimum_volume: float
     market_pages: int
     api_gamma_url: str
@@ -98,6 +99,18 @@ def _actual_lifetime(market: dict[str, Any]) -> pd.Timedelta | None:
         return None
     lifetime = closed - start
     return lifetime if lifetime > pd.Timedelta(0) else None
+
+
+def _event_id(market: dict[str, Any]) -> str:
+    events = market.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if isinstance(event, dict) and event.get("id"):
+                return f"polymarket-event:{event['id']}"
+    condition_id = str(market.get("conditionId") or market.get("id") or "").strip()
+    if not condition_id:
+        raise PolymarketPublicAPIError("Cannot derive event group for market")
+    return f"polymarket-market:{condition_id}"
 
 
 def _is_candidate(
@@ -318,6 +331,7 @@ def collect_public_polymarket_cases(
     max_questions: int = 300,
     candidate_multiplier: int = 3,
     minimum_lead: str | pd.Timedelta = "7D",
+    maximum_price_staleness: str | pd.Timedelta = "3D",
     minimum_volume: float = 100.0,
     max_market_pages: int = 12,
 ) -> tuple[
@@ -333,8 +347,11 @@ def collect_public_polymarket_cases(
         raise ValueError("candidate_multiplier must be positive")
 
     lead = pd.Timedelta(minimum_lead)
+    staleness_limit = pd.Timedelta(maximum_price_staleness)
     if lead <= pd.Timedelta(0):
         raise ValueError("minimum_lead must be positive")
+    if staleness_limit <= pd.Timedelta(0):
+        raise ValueError("maximum_price_staleness must be positive")
 
     candidates = client.fetch_candidate_markets(
         minimum_volume=minimum_volume,
@@ -368,7 +385,10 @@ def collect_public_polymarket_cases(
             continue
 
         forecasted_at = pd.Timestamp(int(trade["timestamp"]), unit="s", tz="UTC")
+        snapshot_staleness = target - forecasted_at
         if forecasted_at > target or actual_close <= forecasted_at:
+            continue
+        if snapshot_staleness > staleness_limit:
             continue
 
         rows.append(
@@ -383,6 +403,8 @@ def collect_public_polymarket_cases(
                 "outcome": outcome,
                 "category": str(market.get("category") or "unknown"),
                 "platform": "polymarket",
+                "event_id": _event_id(market),
+                "snapshot_staleness_hours": snapshot_staleness.total_seconds() / 3600.0,
             }
         )
         markets_used.append(market)
@@ -405,6 +427,7 @@ def collect_public_polymarket_cases(
         attempted_markets=attempted,
         usable_cases=len(cases),
         minimum_lead=str(lead),
+        maximum_price_staleness=str(staleness_limit),
         minimum_volume=minimum_volume,
         market_pages=max_market_pages,
         api_gamma_url=client.gamma_url,
