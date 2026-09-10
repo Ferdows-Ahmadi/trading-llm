@@ -12,9 +12,9 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -24,166 +24,64 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
 
-      - name: Install probe dependencies
-        run: python -m pip install httpx pandas
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
 
-      - name: Probe actual Polymarket closure history
+      - name: Fetch and freeze public Polymarket benchmark
+        run: |
+          prediction-lab-fetch-polymarket \
+            --max-questions 300 \
+            --candidate-multiplier 4 \
+            --minimum-lead 7D \
+            --minimum-volume 100 \
+            --holdout-fraction 0.25 \
+            --max-market-pages 12 \
+            --output-dir data/prediction-lab/polymarket-public-v0.1
+
+      - name: Evaluate deterministic baselines
+        run: |
+          prediction-lab-baselines \
+            data/prediction-lab/polymarket-public-v0.1/development.csv \
+            data/prediction-lab/polymarket-public-v0.1/development.manifest.json \
+            data/prediction-lab/polymarket-public-v0.1/holdout.csv \
+            data/prediction-lab/polymarket-public-v0.1/holdout.manifest.json \
+            --output data/prediction-lab/polymarket-public-v0.1/baselines.json
+
+      - name: Print benchmark result
         run: |
           python - <<'PY'
           import json
-          import httpx
-          import pandas as pd
+          from pathlib import Path
 
-          gamma = "https://gamma-api.polymarket.com"
-          data = "https://data-api.polymarket.com"
+          root = Path("data/prediction-lab/polymarket-public-v0.1")
+          summary = json.loads((root / "acquisition-summary.json").read_text())
+          baselines = json.loads((root / "baselines.json").read_text())
 
-          def resolved_binary(market):
-              try:
-                  outcomes = json.loads(market.get("outcomes") or "[]")
-                  prices = [
-                      float(value)
-                      for value in json.loads(market.get("outcomePrices") or "[]")
-                  ]
-              except (TypeError, ValueError, json.JSONDecodeError):
-                  return False
-              names = [str(value).strip().lower() for value in outcomes]
-              if len(names) != 2 or set(names) != {"yes", "no"} or len(prices) != 2:
-                  return False
-              yes_index = names.index("yes")
-              no_index = names.index("no")
-              return (
-                  prices[yes_index] >= 0.99 and prices[no_index] <= 0.01
-              ) or (
-                  prices[yes_index] <= 0.01 and prices[no_index] >= 0.99
+          print("=== BENCHMARK SIZE ===")
+          print("candidate_markets:", summary["acquisition"]["candidate_markets"])
+          print("attempted_markets:", summary["acquisition"]["attempted_markets"])
+          print("usable_cases:", summary["acquisition"]["usable_cases"])
+          print("development:", summary["development_rows"])
+          print("holdout:", summary["holdout_rows"])
+          print("holdout_start:", summary["holdout_start"])
+          print("=== HOLDOUT BASELINES ===")
+          for name, report in baselines["reports"].items():
+              print(
+                  name,
+                  "brier=", report["model_brier"],
+                  "market_brier=", report["market_brier"],
+                  "delta=", report["brier_delta"],
+                  "skill=", report["model_skill_vs_market"],
               )
-
-          with httpx.Client(timeout=30.0) as client:
-              response = client.get(
-                  f"{gamma}/markets/keyset",
-                  params={
-                      "limit": 100,
-                      "closed": "true",
-                      "order": "endDate",
-                      "ascending": "false",
-                  },
-              )
-              print("markets HTTP:", response.status_code)
-              response.raise_for_status()
-              payload = response.json()
-              markets = payload.get("markets", [])
-              print("markets returned:", len(markets))
-              print("next_cursor present:", bool(payload.get("next_cursor")))
-              if markets:
-                  interesting = [
-                      key
-                      for key in (
-                          "id",
-                          "question",
-                          "startDate",
-                          "endDate",
-                          "closedTime",
-                          "updatedAt",
-                          "umaEndDate",
-                          "conditionId",
-                          "closed",
-                          "outcomes",
-                          "outcomePrices",
-                      )
-                      if key in markets[0]
-                  ]
-                  print("relevant fields present:", interesting)
-
-              closure_present = 0
-              actual_long = []
-              schedule_gap_days = []
-              for market in markets:
-                  start_value = market.get("startDate") or market.get("createdAt")
-                  close_value = market.get("closedTime")
-                  if not start_value or not close_value:
-                      continue
-                  closure_present += 1
-                  start = pd.Timestamp(start_value)
-                  closed = pd.Timestamp(close_value)
-                  actual_days = (closed - start).total_seconds() / 86400.0
-                  if market.get("endDate"):
-                      scheduled_end = pd.Timestamp(market["endDate"])
-                      schedule_gap_days.append(
-                          (scheduled_end - closed).total_seconds() / 86400.0
-                      )
-                  if actual_days >= 7 and resolved_binary(market):
-                      actual_long.append((actual_days, market))
-
-              print("closedTime present:", closure_present, "/", len(markets))
-              print("resolved binary actual lifetime >=7d:", len(actual_long))
-              if actual_long:
-                  durations = [item[0] for item in actual_long]
-                  print(
-                      "actual duration min/median/max:",
-                      min(durations),
-                      pd.Series(durations).median(),
-                      max(durations),
-                  )
-              if schedule_gap_days:
-                  print(
-                      "scheduled end minus actual close median/max days:",
-                      pd.Series(schedule_gap_days).median(),
-                      max(schedule_gap_days),
-                  )
-
-              if not actual_long:
-                  raise RuntimeError(
-                      "No resolved binary market with >=7 actual days found in probe page"
-                  )
-
-              _, sample = actual_long[0]
-              actual_close = pd.Timestamp(sample["closedTime"])
-              target = actual_close - pd.Timedelta(days=7)
-              condition_id = sample["conditionId"]
-              trade_response = client.get(
-                  f"{data}/trades",
-                  params={
-                      "market": condition_id,
-                      "end": int(target.timestamp()),
-                      "limit": 1000,
-                      "takerOnly": "true",
-                  },
-              )
-              print("sample id:", sample.get("id"))
-              print("sample question:", sample.get("question"))
-              print("sample startDate:", sample.get("startDate"))
-              print("sample scheduled endDate:", sample.get("endDate"))
-              print("sample actual closedTime:", sample.get("closedTime"))
-              print("sample updatedAt:", sample.get("updatedAt"))
-              print("sample umaEndDate:", sample.get("umaEndDate"))
-              print("sample target:", target.isoformat())
-              print("trades HTTP:", trade_response.status_code)
-              trade_response.raise_for_status()
-              trades = trade_response.json()
-              print("trades returned:", len(trades) if isinstance(trades, list) else "not-list")
-              eligible = []
-              if isinstance(trades, list):
-                  eligible = [
-                      trade
-                      for trade in trades
-                      if int(trade.get("timestamp", 0)) <= int(target.timestamp())
-                  ]
-              print("eligible trades:", len(eligible))
-              if eligible:
-                  latest = max(eligible, key=lambda trade: int(trade["timestamp"]))
-                  safe = {
-                      key: latest.get(key)
-                      for key in (
-                          "conditionId",
-                          "asset",
-                          "price",
-                          "timestamp",
-                          "outcome",
-                          "outcomeIndex",
-                          "side",
-                      )
-                  }
-                  print("latest eligible trade:", safe)
-              else:
-                  raise RuntimeError("Sample has no trade at least seven days before actual close")
           PY
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1
+          path: data/prediction-lab/polymarket-public-v0.1/
+          if-no-files-found: error
+          retention-days: 14
