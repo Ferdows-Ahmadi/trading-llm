@@ -236,7 +236,7 @@ class ModelMetadata:
     model_id: str
     immutable_version: str
     release_date: datetime
-    knowledge_cutoff: datetime
+    knowledge_cutoff: datetime | None
     execution_mode: Literal["local", "api"]
     contamination_assessment: Literal["historical-safe", "unknown", "contaminated"]
     contamination_notes: str
@@ -249,7 +249,7 @@ class ModelMetadata:
         model_id: str,
         immutable_version: str,
         release_date: object,
-        knowledge_cutoff: object,
+        knowledge_cutoff: object | None,
         execution_mode: str,
         contamination_assessment: str,
         contamination_notes: str,
@@ -258,12 +258,17 @@ class ModelMetadata:
             raise ResearchContractError("execution_mode must be local or api")
         if contamination_assessment not in {"historical-safe", "unknown", "contaminated"}:
             raise ResearchContractError("Invalid contamination_assessment")
+        cutoff = (
+            None
+            if knowledge_cutoff is None
+            else parse_utc(knowledge_cutoff, field="knowledge_cutoff")
+        )
         return cls(
             provider=_non_empty(provider, field="provider"),
             model_id=_non_empty(model_id, field="model_id"),
             immutable_version=_non_empty(immutable_version, field="immutable_version"),
             release_date=parse_utc(release_date, field="release_date"),
-            knowledge_cutoff=parse_utc(knowledge_cutoff, field="knowledge_cutoff"),
+            knowledge_cutoff=cutoff,
             execution_mode=execution_mode,  # type: ignore[arg-type]
             contamination_assessment=contamination_assessment,  # type: ignore[arg-type]
             contamination_notes=_non_empty(contamination_notes, field="contamination_notes"),
@@ -290,13 +295,19 @@ class ModelMetadata:
             )
         if self.release_date > forecast_time:
             raise ResearchContractError("Model release date is after the historical forecast")
+        if self.knowledge_cutoff is None:
+            raise ResearchContractError(
+                "Historical scoring requires a known model knowledge cutoff"
+            )
         if self.knowledge_cutoff > forecast_time:
             raise ResearchContractError("Model knowledge cutoff is after the historical forecast")
 
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["release_date"] = format_utc(self.release_date)
-        result["knowledge_cutoff"] = format_utc(self.knowledge_cutoff)
+        result["knowledge_cutoff"] = (
+            format_utc(self.knowledge_cutoff) if self.knowledge_cutoff is not None else None
+        )
         return result
 
 
