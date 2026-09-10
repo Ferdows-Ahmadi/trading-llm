@@ -84,7 +84,8 @@ def test_fast_commoncrawl_never_degrades_article_lookup_to_homepage() -> None:
     assert capture is None
     assert queried_urls
     assert all("/news/specific-article" in value for value in queried_urls)
-    assert all(value.rstrip("/") not in {"https://example.org", "https://www.example.org"} for value in queried_urls)
+    roots = {"https://example.org", "https://www.example.org"}
+    assert all(value.rstrip("/") not in roots for value in queried_urls)
     http_client.close()
 
 
