@@ -6,6 +6,7 @@ on:
       - research/prediction-market-lab-v0.1
     paths:
       - .github/workflows/gdelt-commoncrawl-evidence-pilot.yml
+      - packages/prediction-lab/src/prediction_lab/gdelt_evidence.py
   workflow_dispatch:
 
 permissions:
@@ -80,7 +81,7 @@ jobs:
       - name: Upload evidence pilot artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdelt-commoncrawl-evidence-pilot-v0.1
+          name: gdelt-commoncrawl-evidence-pilot-v0.2
           path: evidence-pilot/
           if-no-files-found: error
           retention-days: 14
