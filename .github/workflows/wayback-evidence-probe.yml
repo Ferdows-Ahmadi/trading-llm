@@ -1,0 +1,61 @@
+name: Wayback Evidence Probe
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/wayback-evidence-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Probe pre-cutoff captures
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          endpoint = "https://web.archive.org/cdx/search/cdx"
+          samples = [
+              ("https://hyperswap.exchange/", "20251016061633"),
+              ("https://gmgn.ai/app", "20251224092053"),
+              ("https://www.binance.com/en/trade/ETH_USDT", "20260129154134"),
+          ]
+          headers = {"User-Agent": "trading-prediction-lab/0.1 historical-evidence-research"}
+          for url, cutoff in samples:
+              params = [
+                  ("url", url),
+                  ("output", "json"),
+                  ("fl", "timestamp,original,mimetype,statuscode,digest,length"),
+                  ("filter", "statuscode:200"),
+                  ("filter", "mimetype:text/html"),
+                  ("to", cutoff),
+                  ("from", "2024"),
+                  ("limit", "5"),
+              ]
+              request = urllib.request.Request(
+                  endpoint + "?" + urllib.parse.urlencode(params),
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = response.read().decode("utf-8", errors="replace")
+                      print("URL:", url)
+                      print("HTTP:", response.status)
+                      payload = json.loads(body)
+                      print("rows:", max(0, len(payload) - 1) if isinstance(payload, list) else -1)
+                      if isinstance(payload, list) and len(payload) > 1:
+                          print("latest:", payload[-1])
+              except Exception as exc:
+                  print("URL:", url)
+                  print("ERROR:", type(exc).__name__, str(exc))
+          PY
