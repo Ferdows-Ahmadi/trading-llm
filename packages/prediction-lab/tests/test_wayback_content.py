@@ -85,7 +85,11 @@ def test_freeze_wayback_content_builds_hashed_evidence_fixture(tmp_path: Path) -
     capture_path = tmp_path / "captures.jsonl"
     capture_path.write_text(json.dumps(capture) + "\n", encoding="utf-8")
 
-    html = "<html><body><article><h1>Historical article</h1><p>" + ("evidence " * 40) + "</p></article></body></html>"
+    html = (
+        "<html><body><article><h1>Historical article</h1><p>"
+        + ("evidence " * 40)
+        + "</p></article></body></html>"
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -121,8 +125,8 @@ def test_freeze_wayback_content_builds_hashed_evidence_fixture(tmp_path: Path) -
     assert item["available_at"] == "2026-01-02T12:00:00.000000Z"
     assert item["source_type"] == "wayback-archived-news"
     assert item["text"]
-    assert (output / "raw").glob("*.html")
-    assert (output / "text").glob("*.txt")
+    assert list((output / "raw").glob("*.html"))
+    assert list((output / "text").glob("*.txt"))
 
     provider = FileEvidenceProvider(output / "evidence-fixture.json")
     packet = provider.build_packet(
