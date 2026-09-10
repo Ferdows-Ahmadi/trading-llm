@@ -37,6 +37,7 @@ prediction-lab-cc-capture-index = "prediction_lab.evidence_capture_cli:main"
 prediction-lab-wayback-capture-index = "prediction_lab.wayback_capture_cli:main"
 prediction-lab-wayback-freeze-content = "prediction_lab.wayback_content_cli:main"
 prediction-lab-filter-evidence = "prediction_lab.evidence_relevance_cli:main"
+prediction-lab-build-pilot = "prediction_lab.pilot_dataset_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
