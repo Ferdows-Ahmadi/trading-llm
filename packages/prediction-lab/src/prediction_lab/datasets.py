@@ -55,6 +55,13 @@ def require_one_case_per_question(cases: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _utc_cutoff(value: str | pd.Timestamp) -> pd.Timestamp:
+    cutoff = pd.Timestamp(value)
+    if cutoff.tzinfo is None:
+        return cutoff.tz_localize("UTC")
+    return cutoff.tz_convert("UTC")
+
+
 def temporal_question_split(
     cases: pd.DataFrame,
     *,
@@ -63,11 +70,7 @@ def temporal_question_split(
     """Split single-observation questions into development and temporal holdout sets."""
 
     normalized = require_one_case_per_question(cases)
-    cutoff = pd.Timestamp(holdout_start)
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.tz_localize("UTC")
-    else:
-        cutoff = cutoff.tz_convert("UTC")
+    cutoff = _utc_cutoff(holdout_start)
 
     development = normalized.loc[normalized["forecasted_at"] < cutoff].copy()
     holdout = normalized.loc[normalized["forecasted_at"] >= cutoff].copy()
@@ -78,6 +81,53 @@ def temporal_question_split(
         )
     if development["forecasted_at"].max() >= holdout["forecasted_at"].min():
         raise DatasetFreezeError("Temporal split overlap detected")
+
+    development["split"] = "development"
+    holdout["split"] = "holdout"
+    return development.reset_index(drop=True), holdout.reset_index(drop=True)
+
+
+def purged_temporal_group_split(
+    cases: pd.DataFrame,
+    *,
+    holdout_start: str | pd.Timestamp,
+    group_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Time-split cases and purge holdout groups previously seen in development.
+
+    Prediction markets frequently contain several mutually related questions under one
+    parent event. A plain question-level temporal split can therefore place sibling
+    markets in both development and holdout. This helper retains development data and
+    removes every holdout row whose group was already observed before the cutoff.
+    """
+
+    normalized = require_one_case_per_question(cases)
+    if group_column not in normalized.columns:
+        raise DatasetFreezeError(f"Missing group column for purged split: {group_column}")
+
+    raw_groups = normalized[group_column]
+    if raw_groups.isna().any() or raw_groups.astype(str).str.strip().eq("").any():
+        raise DatasetFreezeError(f"Group column {group_column} must not contain null/blank values")
+
+    cutoff = _utc_cutoff(holdout_start)
+    development = normalized.loc[normalized["forecasted_at"] < cutoff].copy()
+    holdout = normalized.loc[normalized["forecasted_at"] >= cutoff].copy()
+    if development.empty or holdout.empty:
+        raise DatasetFreezeError(
+            "Temporal split must produce non-empty development and holdout sets before purging"
+        )
+
+    development_groups = set(development[group_column].astype(str))
+    holdout_groups = holdout[group_column].astype(str)
+    holdout = holdout.loc[~holdout_groups.isin(development_groups)].copy()
+    if holdout.empty:
+        raise DatasetFreezeError("Group purging removed the entire temporal holdout")
+
+    remaining_overlap = development_groups & set(holdout[group_column].astype(str))
+    if remaining_overlap:
+        raise DatasetFreezeError("Group overlap remains after purging")
+    if development["forecasted_at"].max() >= holdout["forecasted_at"].min():
+        raise DatasetFreezeError("Temporal split overlap detected after group purging")
 
     development["split"] = "development"
     holdout["split"] = "holdout"
