@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 import pandas as pd
 
+from prediction_lab.capture_index_client import CommonCrawlTransportError
 from prediction_lab.commoncrawl_evidence import (
     CommonCrawlCapture,
     HistoricalEvidenceError,
@@ -73,6 +75,36 @@ def _checkpoint_name(question_id: str, url: str) -> str:
     return f"{digest}.json"
 
 
+def _validate_cached_record(
+    cached: object,
+    *,
+    question_id: str,
+    url: str,
+) -> dict[str, object]:
+    if not isinstance(cached, dict):
+        raise HistoricalEvidenceError("Capture checkpoint must contain a JSON object")
+    if str(cached.get("question_id") or "") != question_id:
+        raise HistoricalEvidenceError(
+            f"Capture checkpoint question mismatch for {question_id}"
+        )
+    if str(cached.get("article_url") or "") != url:
+        raise HistoricalEvidenceError(
+            f"Capture checkpoint URL mismatch for question {question_id}"
+        )
+    return cached
+
+
+def _cached_status(record: dict[str, object]) -> str:
+    status = str(record.get("lookup_status") or "")
+    if status in {"capture", "no_capture", "transport_failure"}:
+        return status
+    if record.get("error"):
+        return "transport_failure"
+    if bool(record.get("capture_found")):
+        return "capture"
+    return "no_capture"
+
+
 def run_commoncrawl_capture_stage(
     *,
     development_csv: str | Path,
@@ -120,6 +152,7 @@ def run_commoncrawl_capture_stage(
     rows: list[dict[str, object]] = []
     reused = 0
     attempted = 0
+    retried_failed = 0
 
     for question_id, row in pilot_by_id.items():
         discovery = discovery_by_id.get(question_id)
@@ -149,10 +182,20 @@ def run_commoncrawl_capture_stage(
             seen_urls.add(url)
             checkpoint = checkpoints / _checkpoint_name(question_id, url)
             if checkpoint.exists():
-                cached = json.loads(checkpoint.read_text(encoding="utf-8"))
-                rows.append(cached)
-                reused += 1
-                continue
+                cached = _validate_cached_record(
+                    json.loads(checkpoint.read_text(encoding="utf-8")),
+                    question_id=question_id,
+                    url=url,
+                )
+                status = _cached_status(cached)
+                if status != "transport_failure":
+                    if cached.get("lookup_status") != status:
+                        cached["lookup_status"] = status
+                        _atomic_write_json(checkpoint, cached)
+                    rows.append(cached)
+                    reused += 1
+                    continue
+                retried_failed += 1
 
             attempted += 1
             error: str | None = None
@@ -163,13 +206,20 @@ def run_commoncrawl_capture_stage(
                     cutoff=cutoff,
                     max_collections=max_collections,
                 )
-            except Exception as exc:  # noqa: BLE001 - provider failure is audit data
+            except (CommonCrawlTransportError, httpx.HTTPError) as exc:
                 error = f"{type(exc).__name__}: {exc}"
 
             if capture is not None and capture.timestamp > cutoff:
                 raise HistoricalEvidenceError(
                     f"Common Crawl returned post-cutoff capture for question {question_id}"
                 )
+
+            if error is not None:
+                lookup_status = "transport_failure"
+            elif capture is not None:
+                lookup_status = "capture"
+            else:
+                lookup_status = "no_capture"
 
             record: dict[str, object] = {
                 "question_id": question_id,
@@ -180,6 +230,7 @@ def run_commoncrawl_capture_stage(
                 "discovered_seen_at": str(raw_article.get("seen_at") or ""),
                 "capture": capture.to_dict() if capture is not None else None,
                 "capture_found": capture is not None,
+                "lookup_status": lookup_status,
                 "error": error,
             }
             _atomic_write_json(checkpoint, record)
@@ -203,6 +254,7 @@ def run_commoncrawl_capture_stage(
             "event_id": [record["event_id"] for record in rows],
             "article_url": [record["article_url"] for record in rows],
             "capture_found": [record["capture_found"] for record in rows],
+            "lookup_status": [record["lookup_status"] for record in rows],
             "error": [record["error"] or "" for record in rows],
         }
     )
@@ -215,20 +267,22 @@ def run_commoncrawl_capture_stage(
     captured_question_ids = {
         str(record["question_id"])
         for record in rows
-        if bool(record["capture_found"])
+        if record["lookup_status"] == "capture"
     }
-    captures_found = sum(bool(record["capture_found"]) for record in rows)
-    failures = sum(bool(record["error"]) for record in rows)
+    captures_found = sum(record["lookup_status"] == "capture" for record in rows)
+    failures = sum(record["lookup_status"] == "transport_failure" for record in rows)
+    no_capture = sum(record["lookup_status"] == "no_capture" for record in rows)
     summary: dict[str, object] = {
         "pilot_questions": len(pilot_by_id),
         "questions_with_discovery": questions_with_discovery,
         "questions_with_captures": len(captured_question_ids),
         "urls_considered": len(rows),
         "captures_found": captures_found,
-        "urls_without_capture": len(rows) - captures_found - failures,
+        "urls_without_capture": no_capture,
         "lookup_failures": failures,
         "attempted_this_run": attempted,
         "reused_checkpoints": reused,
+        "retried_failed_checkpoints": retried_failed,
         "max_urls_per_question": max_urls_per_question,
         "max_collections": max_collections,
     }

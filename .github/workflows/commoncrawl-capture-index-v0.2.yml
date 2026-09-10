@@ -1,6 +1,17 @@
-name: Common Crawl Capture Index Pilot v0.1
+name: Common Crawl Capture Index Pilot v0.2
 
 on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/commoncrawl-capture-index-v0.2.yml
+      - packages/prediction-lab/src/prediction_lab/capture_index_client.py
+      - packages/prediction-lab/src/prediction_lab/evidence_capture_stage.py
+      - packages/prediction-lab/src/prediction_lab/evidence_capture_cli.py
+      - packages/prediction-lab/tests/test_capture_index_client.py
+      - packages/prediction-lab/tests/test_evidence_capture_stage.py
+      - packages/prediction-lab/pyproject.toml
   workflow_dispatch:
 
 permissions:
@@ -10,7 +21,7 @@ permissions:
 jobs:
   capture-index:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -35,7 +46,7 @@ jobs:
           repository: Ferdows-Ahmadi/trading-llm
           run-id: 34467576128
 
-      - name: Download v0.4 GDELT discovery artifact
+      - name: Download frozen v0.4 GDELT discovery artifact
         uses: actions/download-artifact@v4
         with:
           name: gdelt-discovery-pilot-v0.4
@@ -43,6 +54,15 @@ jobs:
           github-token: ${{ github.token }}
           repository: Ferdows-Ahmadi/trading-llm
           run-id: 34499882298
+
+      - name: Seed v0.2 from the v0.1 capture checkpoints
+        uses: actions/download-artifact@v4
+        with:
+          name: commoncrawl-capture-index-v0.1
+          path: capture-index
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34510852562
 
       - name: Verify frozen inputs and remove holdout
         run: |
@@ -70,18 +90,20 @@ jobs:
           print("v0.4 questions with discovery:", summary["questions_with_results"])
           PY
 
-      - name: Resolve exact pre-cutoff Common Crawl captures
+      - name: Retry failed Common Crawl capture lookups with bounded pacing
         run: |
-          timeout 20m prediction-lab-cc-capture-index \
+          timeout 25m prediction-lab-cc-capture-index \
             benchmark/development.csv \
             benchmark/development.manifest.json \
             discovery-pilot/discovery.jsonl \
             capture-index \
             --pilot-size 20 \
-            --max-urls-per-question 3 \
+            --max-urls-per-question 1 \
             --max-collections 2 \
-            --retries 1 \
-            --timeout-seconds 4
+            --retries 3 \
+            --timeout-seconds 12 \
+            --retry-backoff-seconds 2 \
+            --minimum-interval-seconds 2
 
       - name: Print capture-index audit
         if: always()
@@ -95,11 +117,11 @@ jobs:
             find capture-index/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
           fi
 
-      - name: Upload capture-index artifact
+      - name: Upload v0.2 capture-index artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: commoncrawl-capture-index-v0.1
+          name: commoncrawl-capture-index-v0.2
           path: capture-index/
           if-no-files-found: error
           retention-days: 14

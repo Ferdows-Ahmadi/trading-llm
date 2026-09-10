@@ -4,8 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from prediction_lab.capture_index_client import CaptureIndexCommonCrawlClient
 from prediction_lab.evidence_capture_stage import run_commoncrawl_capture_stage
-from prediction_lab.gdelt_evidence import FastCommonCrawlClient
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -21,14 +21,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-collections", type=int, default=3)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=float, default=20.0)
+    parser.add_argument("--retry-backoff-seconds", type=float, default=2.0)
+    parser.add_argument("--minimum-interval-seconds", type=float, default=2.0)
     return parser
 
 
 def main() -> None:
     args = _build_parser().parse_args()
-    with FastCommonCrawlClient(
+    with CaptureIndexCommonCrawlClient(
         retries=args.retries,
         timeout_seconds=args.timeout_seconds,
+        retry_backoff_seconds=args.retry_backoff_seconds,
+        minimum_interval_seconds=args.minimum_interval_seconds,
     ) as archive:
         summary, _ = run_commoncrawl_capture_stage(
             development_csv=args.development_csv,

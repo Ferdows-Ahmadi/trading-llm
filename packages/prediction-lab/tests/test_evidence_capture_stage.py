@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from prediction_lab.capture_index_client import CommonCrawlTransportError
 from prediction_lab.commoncrawl_evidence import CommonCrawlCapture
 from prediction_lab.datasets import freeze_cases
 from prediction_lab.evidence_capture_stage import run_commoncrawl_capture_stage
@@ -37,6 +38,28 @@ class FakeArchive:
             length=200,
             mime="text/html",
             status="200",
+        )
+
+
+@dataclass
+class FailOnceArchive(FakeArchive):
+    failed: bool = False
+
+    def latest_capture_before(
+        self,
+        url: str,
+        *,
+        cutoff: object,
+        max_collections: int,
+    ) -> CommonCrawlCapture | None:
+        if "hit/0" in url and not self.failed:
+            self.failed = True
+            self.calls += 1
+            raise CommonCrawlTransportError("temporary provider failure")
+        return super().latest_capture_before(
+            url,
+            cutoff=cutoff,
+            max_collections=max_collections,
         )
 
 
@@ -136,5 +159,46 @@ def test_capture_stage_finds_pre_cutoff_captures_and_reuses_checkpoints(
     assert archive.calls == 3
     assert second_summary["attempted_this_run"] == 0
     assert second_summary["reused_checkpoints"] == 3
+    assert second_summary["retried_failed_checkpoints"] == 0
     assert second_audit.equals(first_audit)
     assert (output / "captures.jsonl").exists()
+
+
+def test_capture_stage_retries_only_failed_checkpoints(tmp_path: Path) -> None:
+    csv_path, manifest_path, discovery_path = _freeze_development(tmp_path)
+    output = tmp_path / "capture-index"
+    archive = FailOnceArchive()
+
+    first_summary, _ = run_commoncrawl_capture_stage(
+        development_csv=csv_path,
+        development_manifest=manifest_path,
+        discovery_jsonl=discovery_path,
+        output_directory=output,
+        archive=archive,
+        pilot_size=3,
+        max_urls_per_question=1,
+        max_collections=1,
+    )
+    assert first_summary["lookup_failures"] == 1
+    assert first_summary["captures_found"] == 1
+    assert first_summary["urls_without_capture"] == 1
+    assert archive.calls == 3
+
+    second_summary, second_audit = run_commoncrawl_capture_stage(
+        development_csv=csv_path,
+        development_manifest=manifest_path,
+        discovery_jsonl=discovery_path,
+        output_directory=output,
+        archive=archive,
+        pilot_size=3,
+        max_urls_per_question=1,
+        max_collections=1,
+    )
+    assert archive.calls == 4
+    assert second_summary["attempted_this_run"] == 1
+    assert second_summary["reused_checkpoints"] == 2
+    assert second_summary["retried_failed_checkpoints"] == 1
+    assert second_summary["lookup_failures"] == 0
+    assert second_summary["captures_found"] == 2
+    assert second_summary["urls_without_capture"] == 1
+    assert set(second_audit["lookup_status"]) == {"capture", "no_capture"}

@@ -97,6 +97,6 @@ Explicitly out of scope for v0.1:
 ## Handoff rule
 
 Before asking Codex or another coding agent to expand the project, point it to this
-file, `docs/prediction-market-lab.md`, and the current benchmark record under
-`docs/benchmarks/`. The correct next task is the earliest unfinished milestone in the
+file, `docs/research-state.md`, `docs/prediction-market-lab.md`, and the current
+benchmark record under `docs/benchmarks/`. The correct next task is the earliest unfinished milestone in the
 lab document, not whichever feature sounds most impressive.
