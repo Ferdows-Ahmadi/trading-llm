@@ -52,3 +52,38 @@ def test_attach_model_probabilities_preserves_case_contract() -> None:
     )
     assert forecasts["model_name"].tolist() == ["test-model", "test-model"]
     assert forecasts["model_probability"].tolist() == [0.7, 0.2]
+
+
+class _SpyForecaster:
+    name = "spy"
+
+    def __init__(self) -> None:
+        self.seen_columns: list[str] = []
+
+    def predict(self, inputs: pd.DataFrame) -> pd.Series:
+        self.seen_columns = inputs.columns.tolist()
+        return inputs["market_probability"]
+
+
+def test_forecaster_cannot_see_outcomes_or_observed_resolution() -> None:
+    forecaster = _SpyForecaster()
+    run_forecaster(_cases(), forecaster)
+    assert "outcome" not in forecaster.seen_columns
+    assert "resolved_at" not in forecaster.seen_columns
+
+
+def test_blind_forecast_hides_market_probability() -> None:
+    class BlindSpy:
+        name = "blind-spy"
+
+        def predict(self, inputs: pd.DataFrame) -> pd.Series:
+            assert "market_probability" not in inputs.columns
+            assert "market_price_timestamp" not in inputs.columns
+            return pd.Series([0.5] * len(inputs))
+
+    forecasts = run_forecaster(
+        _cases(),
+        BlindSpy(),
+        expose_market_probability=False,
+    )
+    assert len(forecasts) == 2

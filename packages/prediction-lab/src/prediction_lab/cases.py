@@ -19,18 +19,25 @@ CASE_REQUIRED_COLUMNS = (
     "outcome",
 )
 
+MODEL_INPUT_BASE_COLUMNS = (
+    "question_id",
+    "question_text",
+    "forecasted_at",
+    "source_cutoff_at",
+)
+
+MODEL_INPUT_OPTIONAL_COLUMNS = (
+    "category",
+    "platform",
+)
+
 
 class ForecastCaseError(ValueError):
     """Raised when a forecast case violates the case data contract."""
 
 
 def normalize_case_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Normalize forecast cases before a model probability has been attached.
-
-    The case contract contains the historical question, contemporaneous market
-    probability, final outcome, and temporal cutoffs. It intentionally has no
-    model forecast yet.
-    """
+    """Normalize forecast cases before a model probability has been attached."""
 
     missing = [column for column in CASE_REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
@@ -41,6 +48,27 @@ def normalize_case_frame(frame: pd.DataFrame) -> pd.DataFrame:
     staged["model_name"] = "__case_validation__"
     normalized = validate_no_future_information(staged)
     return normalized.drop(columns=["model_probability", "model_name"])
+
+
+def model_input_frame(
+    cases: pd.DataFrame,
+    *,
+    expose_market_probability: bool = True,
+) -> pd.DataFrame:
+    """Return the only columns a forecaster is allowed to inspect.
+
+    Final outcomes and observed resolution timestamps are deliberately absent.
+    The contemporaneous market probability can also be hidden for blind forecasts.
+    """
+
+    normalized = normalize_case_frame(cases)
+    columns = list(MODEL_INPUT_BASE_COLUMNS)
+    if expose_market_probability:
+        columns.extend(["market_price_timestamp", "market_probability"])
+    columns.extend(
+        column for column in MODEL_INPUT_OPTIONAL_COLUMNS if column in normalized.columns
+    )
+    return normalized[columns].copy()
 
 
 def attach_model_probabilities(
