@@ -19,7 +19,7 @@ def _parquet_glob(directory: Path, *, label: str) -> str:
     files = sorted(directory.glob("*.parquet"))
     if not files:
         raise BenchmarkBuildError(f"No Parquet files found for {label}: {directory}")
-    return (directory / "*.parquet").as_posix().replace("'", "''")
+    return (directory / "*.parquet").as_posix()
 
 
 def _even_temporal_sample(cases: pd.DataFrame, max_questions: int | None) -> pd.DataFrame:
@@ -60,7 +60,7 @@ def build_kalshi_cases_from_parquet(
     markets_glob = _parquet_glob(root / "kalshi" / "markets", label="Kalshi markets")
     trades_glob = _parquet_glob(root / "kalshi" / "trades", label="Kalshi trades")
 
-    query = f"""
+    query = """
         WITH market_snapshots AS (
             SELECT
                 ticker,
@@ -75,7 +75,7 @@ def build_kalshi_cases_from_parquet(
                     PARTITION BY ticker
                     ORDER BY _fetched_at DESC
                 ) AS snapshot_rank
-            FROM read_parquet('{markets_glob}', union_by_name = true)
+            FROM read_parquet(?, union_by_name = true)
         ),
         resolved AS (
             SELECT
@@ -88,7 +88,7 @@ def build_kalshi_cases_from_parquet(
             WHERE snapshot_rank = 1
               AND LOWER(status) = 'finalized'
               AND LOWER(result) IN ('yes', 'no')
-              AND volume >= {int(min_volume)}
+              AND volume >= ?
               AND COALESCE(close_time, _fetched_at) IS NOT NULL
         ),
         eligible AS (
@@ -108,10 +108,10 @@ def build_kalshi_cases_from_parquet(
                     PARTITION BY r.ticker
                     ORDER BY t.created_time DESC, t.trade_id DESC
                 ) AS trade_rank
-            FROM read_parquet('{trades_glob}', union_by_name = true) AS t
+            FROM read_parquet(?, union_by_name = true) AS t
             INNER JOIN resolved AS r ON r.ticker = t.ticker
             WHERE t.yes_price BETWEEN 1 AND 99
-              AND t.created_time <= r.resolved_at - ({lead_seconds} * INTERVAL '1 second')
+              AND t.created_time <= r.resolved_at - (? * INTERVAL '1 second')
         )
         SELECT
             question_id,
@@ -131,7 +131,10 @@ def build_kalshi_cases_from_parquet(
 
     connection = duckdb.connect()
     try:
-        cases = connection.execute(query).df()
+        cases = connection.execute(
+            query,
+            [markets_glob, int(min_volume), trades_glob, lead_seconds],
+        ).df()
     except duckdb.Error as exc:
         raise BenchmarkBuildError(f"DuckDB failed while building Kalshi cases: {exc}") from exc
     finally:
