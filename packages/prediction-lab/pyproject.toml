@@ -34,6 +34,7 @@ prediction-lab-evidence-pilot = "prediction_lab.commoncrawl_evidence_cli:main"
 prediction-lab-news-evidence-pilot = "prediction_lab.gdelt_evidence_cli:main"
 prediction-lab-gdelt-discovery = "prediction_lab.evidence_discovery_cli:main"
 prediction-lab-cc-capture-index = "prediction_lab.evidence_capture_cli:main"
+prediction-lab-wayback-capture-index = "prediction_lab.wayback_capture_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
