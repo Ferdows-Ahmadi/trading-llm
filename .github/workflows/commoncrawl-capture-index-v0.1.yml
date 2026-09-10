@@ -80,7 +80,7 @@ jobs:
 
       - name: Resolve exact pre-cutoff Common Crawl captures
         run: |
-          prediction-lab-cc-capture-index \
+          timeout 20m prediction-lab-cc-capture-index \
             benchmark/development.csv \
             benchmark/development.manifest.json \
             discovery-pilot/discovery.jsonl \
@@ -88,16 +88,23 @@ jobs:
             --pilot-size 20 \
             --max-urls-per-question 3 \
             --max-collections 2 \
-            --retries 3 \
-            --timeout-seconds 15
+            --retries 1 \
+            --timeout-seconds 4
 
       - name: Print capture-index audit
+        if: always()
         run: |
-          cat capture-index/capture-summary.json
-          echo "--- capture index audit ---"
-          cat capture-index/capture-audit.csv
+          if [ -f capture-index/capture-summary.json ]; then
+            cat capture-index/capture-summary.json
+            echo "--- capture index audit ---"
+            cat capture-index/capture-audit.csv
+          else
+            echo "Capture stage did not reach final summary. Preserving partial checkpoints."
+            find capture-index/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
+          fi
 
       - name: Upload capture-index artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: commoncrawl-capture-index-v0.1

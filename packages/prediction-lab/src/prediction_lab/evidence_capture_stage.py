@@ -69,7 +69,7 @@ def _load_discovery(path: str | Path) -> list[dict[str, Any]]:
 
 
 def _checkpoint_name(question_id: str, url: str) -> str:
-    digest = hashlib.sha256(f"{question_id}\n{url}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{question_id}\n{url}".encode()).hexdigest()
     return f"{digest}.json"
 
 
