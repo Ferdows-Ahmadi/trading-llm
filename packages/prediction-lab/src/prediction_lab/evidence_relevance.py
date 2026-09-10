@@ -5,7 +5,6 @@ import json
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any
 
 from prediction_lab.research_types import EvidenceItem, ResearchContractError, content_hash
 
@@ -146,7 +145,8 @@ def _read_questions(path: str | Path) -> dict[str, str]:
     questions: dict[str, str] = {}
     with Path(path).open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        if not reader.fieldnames or not {"question_id", "question_text"}.issubset(reader.fieldnames):
+        required = {"question_id", "question_text"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
             raise ResearchContractError("Benchmark CSV must contain question_id and question_text")
         for row in reader:
             question_id = str(row.get("question_id") or "").strip()
@@ -159,9 +159,8 @@ def _read_questions(path: str | Path) -> dict[str, str]:
 def _read_pilot_ids(path: str | Path) -> tuple[str, ...]:
     question_ids: list[str] = []
     seen: set[str] = set()
-    for line_number, line in enumerate(
-        Path(path).read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         try:
@@ -221,7 +220,9 @@ def filter_evidence_fixture(
 
     output = Path(output_directory)
     output.mkdir(parents=True, exist_ok=True)
-    filtered: dict[str, list[dict[str, object]]] = {question_id: [] for question_id in pilot_ids}
+    filtered: dict[str, list[dict[str, object]]] = {
+        question_id: [] for question_id in pilot_ids
+    }
     audit_rows: list[dict[str, object]] = []
     raw_item_count = 0
 
@@ -229,11 +230,15 @@ def filter_evidence_fixture(
         question_text = questions.get(question_id)
         if question_text is None:
             raise ResearchContractError(f"Pilot question {question_id} is absent from benchmark CSV")
-        subject, intent = extract_question_subject(question_text)
         raw_items = raw_questions.get(question_id, [])
-        if not isinstance(raw_items, list) or not all(isinstance(item, dict) for item in raw_items):
+        if not isinstance(raw_items, list) or not all(
+            isinstance(item, dict) for item in raw_items
+        ):
             raise ResearchContractError(f"Evidence fixture entry {question_id} must be an item list")
+        if not raw_items:
+            continue
 
+        subject, intent = extract_question_subject(question_text)
         candidates: list[tuple[int, bool, EvidenceItem, tuple[str, ...]]] = []
         decisions: dict[str, dict[str, object]] = {}
         for raw_item in raw_items:
@@ -318,7 +323,8 @@ def filter_evidence_fixture(
         "kept",
         "reason",
     )
-    with (output / "relevance-audit.csv").open("w", encoding="utf-8", newline="") as handle:
+    audit_path = output / "relevance-audit.csv"
+    with audit_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=audit_fields)
         writer.writeheader()
         writer.writerows(audit_rows)
