@@ -109,6 +109,10 @@ def main() -> None:
         )
         manifests[name] = manifest.to_dict()
 
+    max_staleness_hours = max(
+        development["snapshot_staleness_hours"].max(),
+        holdout["snapshot_staleness_hours"].max(),
+    )
     summary = {
         "acquisition": acquisition.to_dict(),
         "holdout_start": holdout_start.isoformat(),
@@ -123,9 +127,7 @@ def main() -> None:
             set(development["event_id"].astype(str))
             & set(holdout["event_id"].astype(str))
         ),
-        "max_snapshot_staleness_hours": float(
-            max(development["snapshot_staleness_hours"].max(), holdout["snapshot_staleness_hours"].max())
-        ),
+        "max_snapshot_staleness_hours": float(max_staleness_hours),
         "raw_source_hashes": {
             "source-markets.jsonl": markets_sha,
             "source-trades.jsonl": trades_sha,
