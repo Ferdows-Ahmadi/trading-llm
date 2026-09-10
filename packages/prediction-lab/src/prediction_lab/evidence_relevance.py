@@ -229,12 +229,16 @@ def filter_evidence_fixture(
     for question_id in pilot_ids:
         question_text = questions.get(question_id)
         if question_text is None:
-            raise ResearchContractError(f"Pilot question {question_id} is absent from benchmark CSV")
+            raise ResearchContractError(
+                f"Pilot question {question_id} is absent from benchmark CSV"
+            )
         raw_items = raw_questions.get(question_id, [])
         if not isinstance(raw_items, list) or not all(
             isinstance(item, dict) for item in raw_items
         ):
-            raise ResearchContractError(f"Evidence fixture entry {question_id} must be an item list")
+            raise ResearchContractError(
+                f"Evidence fixture entry {question_id} must be an item list"
+            )
         if not raw_items:
             continue
 
