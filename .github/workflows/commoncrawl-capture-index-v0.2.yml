@@ -1,17 +1,6 @@
 name: Common Crawl Capture Index Pilot v0.2
 
 on:
-  push:
-    branches:
-      - research/prediction-market-lab-v0.1
-    paths:
-      - .github/workflows/commoncrawl-capture-index-v0.2.yml
-      - packages/prediction-lab/src/prediction_lab/capture_index_client.py
-      - packages/prediction-lab/src/prediction_lab/evidence_capture_stage.py
-      - packages/prediction-lab/src/prediction_lab/evidence_capture_cli.py
-      - packages/prediction-lab/tests/test_capture_index_client.py
-      - packages/prediction-lab/tests/test_evidence_capture_stage.py
-      - packages/prediction-lab/pyproject.toml
   workflow_dispatch:
 
 permissions:
