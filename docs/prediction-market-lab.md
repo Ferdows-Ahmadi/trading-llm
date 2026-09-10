@@ -182,18 +182,20 @@ Status: complete.
 
 ### M4 - First research forecaster
 
-Next target. See `docs/codex-forecasting-handoff.md`.
+Status: reproducible machinery complete; scientific model/source selection remains.
 
-- [ ] define immutable research/evidence packets available at historical time T
-- [ ] enforce source publication/availability timestamps
+See `docs/codex-forecasting-handoff.md` and `docs/m4-research-forecaster.md`.
+
+- [x] define immutable research/evidence packets available at historical time T
+- [x] enforce source publication/availability timestamps
 - [ ] use a frozen pre-period model for historical scoring
-- [ ] base-rate estimate
-- [ ] evidence update
-- [ ] adversarial critique
-- [ ] final probability with structured output
-- [ ] cache source/model artifacts for reproducibility
-- [ ] run blind and market-aware variants
-- [ ] iterate only inside development data
+- [x] base-rate estimate
+- [x] evidence update
+- [x] adversarial critique
+- [x] final probability with structured output
+- [x] cache source/model artifacts for reproducibility
+- [x] run blind and market-aware variants
+- [x] iterate only inside development data
 - [ ] evaluate frozen holdout only after the design is locked
 - [ ] begin a separate forward/live-shadow forecast ledger for current frontier models
 

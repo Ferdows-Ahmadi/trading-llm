@@ -11,6 +11,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.pyc
+*.egg-info/
 
 # Environment / secrets
 .env

@@ -28,6 +28,7 @@ prediction-lab-build = "prediction_lab.benchmark_cli:main"
 prediction-lab-baselines = "prediction_lab.baseline_cli:main"
 prediction-lab-fetch-kalshi = "prediction_lab.kalshi_public_cli:main"
 prediction-lab-fetch-polymarket = "prediction_lab.polymarket_public_cli:main"
+prediction-lab-research = "prediction_lab.research_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
