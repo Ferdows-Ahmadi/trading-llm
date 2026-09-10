@@ -6,6 +6,8 @@ from pathlib import Path
 
 import httpx
 import pandas as pd
+from warcio.statusandheaders import StatusAndHeaders
+from warcio.warcwriter import WARCWriter
 
 from prediction_lab.commoncrawl_evidence import (
     CommonCrawlCapture,
@@ -15,8 +17,6 @@ from prediction_lab.commoncrawl_evidence import (
     select_parent_event_pilot,
 )
 from prediction_lab.datasets import freeze_cases
-from warcio.statusandheaders import StatusAndHeaders
-from warcio.warcwriter import WARCWriter
 
 
 def test_extract_reference_urls_uses_metadata_only_as_locator() -> None:
@@ -100,7 +100,10 @@ def test_latest_capture_rejects_post_cutoff_and_non_html() -> None:
                     "length": "20",
                 },
             ]
-            return httpx.Response(200, text="\n".join(json.dumps(row) for row in rows))
+            return httpx.Response(
+                200,
+                text="\n".join(json.dumps(row) for row in rows),
+            )
         raise AssertionError(f"Unexpected URL {request.url}")
 
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -128,7 +131,11 @@ def _warc_bytes() -> bytes:
         b"characters so the production minimum-text guard does not reject this fixture.</p>"
         b"</body></html>"
     )
-    http_headers = StatusAndHeaders("200 OK", [("Content-Type", "text/html")], protocol="HTTP/1.1")
+    http_headers = StatusAndHeaders(
+        "200 OK",
+        [("Content-Type", "text/html")],
+        protocol="HTTP/1.1",
+    )
     record = writer.create_warc_record(
         "https://example.org/",
         "response",
@@ -217,7 +224,11 @@ def test_build_pilot_keeps_zero_evidence_questions_explicit(tmp_path: Path) -> N
 
     class FakeClient:
         def latest_capture_before(
-            self, url: str, *, cutoff: object, max_collections: int = 6
+            self,
+            url: str,
+            *,
+            cutoff: object,
+            max_collections: int = 6,
         ) -> CommonCrawlCapture | None:
             del cutoff, max_collections
             if "project1" in url or "project3" in url:
@@ -235,7 +246,10 @@ def test_build_pilot_keeps_zero_evidence_questions_explicit(tmp_path: Path) -> N
             )
 
         def fetch_capture_text(
-            self, capture: CommonCrawlCapture, *, max_characters: int = 12000
+            self,
+            capture: CommonCrawlCapture,
+            *,
+            max_characters: int = 12000,
         ) -> tuple[str, str]:
             del max_characters
             return ("Historical evidence " * 20, f"Archived {capture.url}")
