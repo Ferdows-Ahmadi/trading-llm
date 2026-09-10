@@ -25,50 +25,68 @@ and this document as the canonical project state when a chat transcript is incom
    and evidence identities, and historically unsafe models fail preflight.
 3. Stage A historical-news discovery is viable enough for the pilot. GDELT discovery v0.4
    covered 12 of 20 frozen development questions and preserved 111 article URLs.
-4. Stage B architecture is viable but its first transport configuration was not. Common
-   Crawl capture-index pilot v0.1 completed successfully as a workflow, but among 30
-   attempted URLs it found 0 captures, recorded 29 transport failures, and only 1 clean
-   no-capture result. The failures were dominated by timeouts and HTTP 503 responses.
-   Therefore v0.1 is a transport/reliability result, not evidence that archive coverage is
-   zero.
+4. Stage B v0.1 showed that the original Common Crawl transport strategy was unusable: 0
+   captures, 29 transport failures, and 1 clean no-capture result across 30 attempted URLs.
+   That was a transport result, not evidence of zero archive coverage.
+5. Stage B v0.2 substantially improved transport health but exposed another failure mode.
+   Run `34518969301` reused the frozen benchmark and GDELT v0.4 artifact, removed the
+   holdout, and wrote 11 new top-URL checkpoint decisions before aborting on an unexpected
+   Common Crawl HTTP 400. Among those 11 completed decisions, 8 were definitive
+   `no_capture` and 3 were `transport_failure`; no capture was found in that small partial
+   sample. The run artifact is `commoncrawl-capture-index-v0.2`, artifact ID
+   `10169129484`, digest
+   `sha256:3d5e5608d6f7e639a11887ea3c8ab4987bef44683ae12b6896e7443a4f692c6d`.
+   Its final summary file is stale from v0.1 because v0.2 crashed before rewriting it, so
+   checkpoint statuses are the authoritative partial result.
+6. Two live CDX diagnostics established that the canonical scheme-less exact query shape is
+   valid. Run `34521327099` returned HTTP 200 for a known-good Common Crawl control and
+   HTTP 404 `No Captures found` for the target Econotimes article under several equivalent
+   exact query forms. Run `34521466639` then showed provider instability directly: the same
+   2026-12 target returned HTTP 504, the 2026-08 target returned a clean 404, and even the
+   2026-08 known-good control returned HTTP 503. Therefore provider/client HTTP failures
+   must remain retryable audit outcomes rather than crashing the whole evidence run.
 
-## Current experiment: Stage B v0.2
+## Current experiment: Stage B v0.3
 
-The immediate task is to measure Common Crawl coverage without confusing provider failure
-with absence.
+The immediate task remains measuring archive coverage without confusing provider failure
+with absence. Stage B v0.3 is a bounded recovery run, not a full sweep.
 
-Stage B v0.2 must:
+Current recovery changes:
 
-- keep the exact same frozen development benchmark and GDELT v0.4 discovery artifact;
-- seed from v0.1 checkpoints;
-- reuse successful and definitive no-capture checkpoints;
-- retry checkpoints that contain transport failures;
-- classify every considered URL as `capture`, `no_capture`, or `transport_failure`;
-- use one canonical, scheme-less, exact-page CDX query per crawl collection rather than
-  fanning one article out into many scheme/www variants;
-- preserve exact path validation and reject homepage or different-page substitutions;
-- pace requests and use bounded exponential retry/backoff;
-- remain development-only and fetch no WARC article bodies yet.
+- Stage B v0.2 is frozen as a manual-only historical workflow.
+- `CaptureIndexCommonCrawlClient` now treats unexpected Common Crawl 4xx responses as
+  collection-level incomplete lookups. It records the HTTP status/body excerpt, continues
+  to other eligible collections, and returns a retryable `CommonCrawlTransportError` if no
+  valid capture can make the lookup conclusive.
+- A regression test covers the exact `400 on one collection + 404 on another` case and
+  requires it to remain an auditable incomplete lookup rather than a fatal pipeline error.
+- Stage B v0.3 seeds from the partial v0.2 artifact, reuses the 8 definitive no-capture
+  checkpoints, and retries only the inconclusive top-URL lookups.
+- v0.3 uses two eligible collections, 20-second request timeouts, three retries, five-second
+  exponential backoff, and an eight-second minimum request interval.
+- Stage B v0.3 workflow run: `34521747701`.
+- Launch commit: `5b0ba65eaf6e308e5bfe7ea8fc94372b70a800b3`.
+- Holdout remains deleted before any archive lookup.
 
-The first v0.2 recovery run is intentionally bounded to the top discovered URL per question
-and two eligible crawl collections. It is a transport-health experiment, not the final
-archive-coverage sweep.
+## Decision after Stage B v0.3
 
-## Decision after Stage B v0.2
-
-- If transport failures fall substantially and real captures appear, keep the hardened
-  client and resumably expand Stage B across more of the 111 frozen URLs/collections.
-- If Common Crawl remains mostly transport-failed despite conservative pacing, stop
-  hammering it and evaluate the existing Wayback/CDX fallback as a second archive route.
-- Do not infer `no_capture` from a timeout, HTTP 429, HTTP 5xx, or incomplete crawl search.
-- Do not proceed to model forecasting merely because the workflow itself exits green.
+- If transport failures become rare and one or more real captures appear, keep the hardened
+  Common Crawl path and resumably expand Stage B across more of the 111 frozen URLs and
+  additional eligible collections.
+- If the bounded top-URL sample completes cleanly but still produces zero captures, treat
+  exact-page Common Crawl coverage as weak for this GDELT-derived sample and move to the
+  Wayback/CDX fallback rather than spending more requests proving the same point.
+- If provider instability still dominates despite conservative pacing, also move to the
+  Wayback/CDX fallback. A timeout, HTTP 429, HTTP 4xx provider failure, HTTP 5xx, or
+  incomplete collection search is never `no_capture`.
+- Do not proceed to model forecasting merely because a workflow exits green.
 
 ## Later sequence
 
 Only after Stage B gives defensible capture coverage:
 
-1. Stage C downloads WARC ranges only for verified captures at or before each forecast
-   cutoff.
+1. Stage C downloads archived page bodies only for verified captures at or before each
+   forecast cutoff.
 2. Parse article text and freeze a content-addressed historical evidence corpus.
 3. Lock one contamination-safe frozen historical model and document its provenance.
 4. Run preregistered development-only blind and market-aware forecasts.
