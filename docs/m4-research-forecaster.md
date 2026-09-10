@@ -19,7 +19,8 @@ skill and exists solely to exercise the offline pipeline.
   post-forecast context from research operations performed later.
 - Model metadata must explicitly assess the model as `historical-safe`, with both its
   release date and claimed knowledge cutoff no later than the earliest scored forecast.
-  Unsafe metadata aborts the experiment before per-question execution begins.
+  An unpublished or otherwise unknown knowledge cutoff is represented as `null` and is
+  not eligible for historical scoring. It must never be replaced with an assumed date.
 - Blind requests omit market probability. Market-aware requests include only the
   sanitized contemporaneous probability, not its price timestamp.
 - Outcomes and observed resolution timestamps never enter the adapter request.
