@@ -1,0 +1,166 @@
+name: Evidence Relevance Filter v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/evidence-relevance-filter-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/evidence_relevance.py
+      - packages/prediction-lab/src/prediction_lab/evidence_relevance_cli.py
+      - packages/prediction-lab/tests/test_evidence_relevance.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  filter-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen GDELT discovery pilot
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Download full frozen Wayback evidence corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: wayback-content-freeze-v0.2
+          path: frozen-evidence
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34527997994
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected_benchmark = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual_benchmark = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual_benchmark != expected_benchmark:
+              raise SystemExit(f"development benchmark hash mismatch: {actual_benchmark}")
+
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          if list(Path("benchmark").glob("holdout*")):
+              raise SystemExit("holdout files remain before relevance filtering")
+
+          discovery_lines = [
+              line
+              for line in Path("discovery-pilot/discovery.jsonl")
+              .read_text(encoding="utf-8")
+              .splitlines()
+              if line.strip()
+          ]
+          if len(discovery_lines) != 20:
+              raise SystemExit(f"expected 20 frozen pilot questions, got {len(discovery_lines)}")
+
+          content = json.loads(
+              Path("frozen-evidence/content-summary.json").read_text(encoding="utf-8")
+          )
+          expected_content = {
+              "selected_capture_items": 100,
+              "frozen_items": 94,
+              "content_failures": 6,
+              "questions_with_content": 12,
+          }
+          for key, value in expected_content.items():
+              if content.get(key) != value:
+                  raise SystemExit(
+                      f"frozen content summary changed for {key}: {content.get(key)!r}"
+                  )
+
+          print("development benchmark sha256:", actual_benchmark)
+          print("holdout files removed before relevance filtering")
+          print("pilot questions:", len(discovery_lines))
+          print("raw frozen evidence items:", content["frozen_items"])
+          PY
+
+      - name: Apply preregistered label-blind relevance filter
+        run: |
+          prediction-lab-filter-evidence \
+            benchmark/development.csv \
+            discovery-pilot/discovery.jsonl \
+            frozen-evidence/evidence-fixture.json \
+            filtered-evidence \
+            --max-items-per-question 5 \
+            --context-chars 260
+
+      - name: Verify filtered fixture
+        run: |
+          cat filtered-evidence/relevance-summary.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from prediction_lab.evidence import FileEvidenceProvider
+
+          summary = json.loads(
+              Path("filtered-evidence/relevance-summary.json").read_text(encoding="utf-8")
+          )
+          fixture = json.loads(
+              Path("filtered-evidence/evidence-fixture.filtered.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          FileEvidenceProvider("filtered-evidence/evidence-fixture.filtered.json")
+
+          if summary.get("method_version") != "lexical-relevance-v1":
+              raise SystemExit("unexpected relevance method version")
+          if int(summary.get("pilot_questions", -1)) != 20:
+              raise SystemExit("filtered fixture did not preserve all 20 pilot questions")
+          if int(summary.get("raw_items", -1)) != 94:
+              raise SystemExit("relevance filter did not inspect all 94 frozen evidence items")
+          if len(fixture.get("questions", {})) != 20:
+              raise SystemExit("filtered fixture does not contain exactly 20 explicit questions")
+          if int(summary.get("kept_items", 0)) > 100:
+              raise SystemExit("filtered evidence count is impossible")
+
+          print("filtered fixture hash:", summary["filtered_fixture_hash"])
+          print("questions with relevant evidence:", summary["questions_with_kept"])
+          print("questions without relevant evidence:", summary["questions_without_kept"])
+          print("kept evidence items:", summary["kept_items"])
+          PY
+
+      - name: Upload relevance-filtered evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-relevance-filter-v0.1
+          path: filtered-evidence/
+          if-no-files-found: error
+          retention-days: 14
