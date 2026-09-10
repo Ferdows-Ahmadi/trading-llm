@@ -1,0 +1,48 @@
+name: Common Crawl Query Diagnostic
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/commoncrawl-query-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe exact failing article with several CDX query shapes
+        shell: bash
+        run: |
+          set -u
+          endpoint='https://index.commoncrawl.org/CC-MAIN-2026-12-index'
+          ua='trading-prediction-lab/0.1 diagnostic; contact via github.com/Ferdows-Ahmadi/trading-llm'
+
+          probe() {
+            label="$1"
+            url_value="$2"
+            match_value="${3:-}"
+            echo "=== ${label} ==="
+            args=(--silent --show-error --max-time 35 --get --user-agent "$ua" --data-urlencode "url=${url_value}" --data-urlencode 'output=json' --data-urlencode 'limit=3')
+            if [ -n "$match_value" ]; then
+              args+=(--data-urlencode "matchType=${match_value}")
+            fi
+            tmp=$(mktemp)
+            status=$(curl "${args[@]}" --output "$tmp" --write-out '%{http_code}' "$endpoint" || true)
+            echo "HTTP ${status}"
+            head -c 800 "$tmp" || true
+            echo
+            rm -f "$tmp"
+            sleep 5
+          }
+
+          # Known-good control from Common Crawl's own docs.
+          probe 'control scheme-less' 'commoncrawl.org/faq' ''
+          probe 'article scheme-less default-exact' 'econotimes.com/FxWirePro-Key-Crypto-Updates-1736846' ''
+          probe 'article scheme-less explicit-exact' 'econotimes.com/FxWirePro-Key-Crypto-Updates-1736846' 'exact'
+          probe 'article full-http explicit-exact' 'http://www.econotimes.com/FxWirePro-Key-Crypto-Updates-1736846' 'exact'
