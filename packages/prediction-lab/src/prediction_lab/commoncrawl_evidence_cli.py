@@ -9,7 +9,10 @@ from prediction_lab.commoncrawl_evidence import CommonCrawlClient, build_commonc
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a timestamp-safe Common Crawl evidence pilot from frozen development data."
+        description=(
+            "Build a timestamp-safe Common Crawl evidence pilot from frozen "
+            "development data."
+        )
     )
     parser.add_argument("development_csv", type=Path)
     parser.add_argument("development_manifest", type=Path)
@@ -49,7 +52,11 @@ def main() -> None:
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    audit.to_csv(output / "evidence-pilot-audit.csv", index=False, lineterminator="\n")
+    audit.to_csv(
+        output / "evidence-pilot-audit.csv",
+        index=False,
+        lineterminator="\n",
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
