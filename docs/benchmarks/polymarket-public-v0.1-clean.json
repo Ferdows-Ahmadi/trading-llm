@@ -1,0 +1,64 @@
+{
+  "benchmark_id": "polymarket-public-v0.1-clean",
+  "status": "frozen-reference",
+  "generated_at_utc": "2026-09-10T10:46:07.027712+00:00",
+  "workflow_run": {
+    "id": 34467576128,
+    "head_sha": "7a2ef17b12bb7ede33bae7863532e7b408ce38be",
+    "artifact_id": 10148227264,
+    "artifact_sha256": "5d347520903527abfa00dfa2618d44f1b709b849d5bca731dae61bc524e61ebb"
+  },
+  "source": {
+    "name": "Polymarket Gamma + Data public APIs",
+    "markets_sha256": "302b02769ea4a33311b1780adf7638c6f863a5c9394deff05a6ac647fdb203ad",
+    "trades_sha256": "cc8343146c70f88a6bd76d64bc87ddae28f62cd134be798314dd74a7ad4971c3"
+  },
+  "selection": {
+    "minimum_lead": "7D",
+    "maximum_price_staleness": "3D",
+    "maximum_observed_staleness_hours": 64.98277777777778,
+    "minimum_volume": 100.0,
+    "candidate_markets": 909,
+    "attempted_markets": 400,
+    "usable_cases_before_split": 340,
+    "holdout_fraction_before_group_purge": 0.25,
+    "holdout_start": "2026-04-15T20:12:18+00:00",
+    "parent_event_overlap_policy": "purge holdout rows whose event_id appeared in development"
+  },
+  "development": {
+    "rows": 255,
+    "parent_event_groups": 84,
+    "forecast_start": "2025-10-16T06:16:33+00:00",
+    "forecast_end": "2026-04-15T20:01:06+00:00",
+    "csv_sha256": "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+  },
+  "holdout": {
+    "rows_before_event_purge": 85,
+    "rows": 73,
+    "rows_purged": 12,
+    "parent_event_groups_purged": 6,
+    "parent_event_groups": 19,
+    "event_overlap_after_purge": 0,
+    "forecast_start": "2026-04-17T00:16:20+00:00",
+    "forecast_end": "2026-05-19T21:02:33+00:00",
+    "csv_sha256": "19284338f2b4e180cf144769eebcc1ce6dc7d468a38a64b749c920ed4edfa731"
+  },
+  "holdout_baselines": {
+    "market": {
+      "brier": 0.07668665470623995,
+      "brier_delta_vs_market": 0.0,
+      "skill_vs_market": 0.0
+    },
+    "constant_50": {
+      "brier": 0.25,
+      "brier_delta_vs_market": 0.17331334529376005,
+      "skill_vs_market": -2.260019633894105
+    },
+    "binned_calibration_10": {
+      "brier": 0.07842676486782924,
+      "brier_delta_vs_market": 0.0017401101615892867,
+      "skill_vs_market": -0.02269117316767888
+    }
+  },
+  "interpretation": "The market baseline remains the best deterministic forecaster in v0.1. No forecasting alpha has been demonstrated. This benchmark is a reference dataset for subsequent development, subject to the anti-contamination rules in AGENTS.md."
+}
