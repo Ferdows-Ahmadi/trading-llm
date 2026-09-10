@@ -10,7 +10,7 @@ and this document as the canonical project state when a chat transcript is incom
 - `main` remains untouched by this research lane.
 - Pull request: #1 remains unmerged.
 - Pre-Stage-B-hardening reference commit:
-  `d2bf52888f19968a5c0e58dec372549196ff3f21`
+  `d2bf52888f19968a5c0e58dec372549196ff3f21`.
 - The frozen development benchmark SHA-256 is
   `c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7`.
 - Holdout data must be deleted from historical-evidence jobs before discovery or archive
@@ -32,9 +32,8 @@ and this document as the canonical project state when a chat transcript is incom
    Run `34518969301` reused the frozen benchmark and GDELT v0.4 artifact, removed the
    holdout, and wrote 11 new top-URL checkpoint decisions before aborting on an unexpected
    Common Crawl HTTP 400. Among those 11 completed decisions, 8 were definitive
-   `no_capture` and 3 were `transport_failure`; no capture was found in that small partial
-   sample. The run artifact is `commoncrawl-capture-index-v0.2`, artifact ID
-   `10169129484`, digest
+   `no_capture` and 3 were `transport_failure`; no capture was found. The run artifact is
+   `commoncrawl-capture-index-v0.2`, artifact ID `10169129484`, digest
    `sha256:3d5e5608d6f7e639a11887ea3c8ab4987bef44683ae12b6896e7443a4f692c6d`.
    Its final summary file is stale from v0.1 because v0.2 crashed before rewriting it, so
    checkpoint statuses are the authoritative partial result.
@@ -43,43 +42,55 @@ and this document as the canonical project state when a chat transcript is incom
    HTTP 404 `No Captures found` for the target Econotimes article under several equivalent
    exact query forms. Run `34521466639` then showed provider instability directly: the same
    2026-12 target returned HTTP 504, the 2026-08 target returned a clean 404, and even the
-   2026-08 known-good control returned HTTP 503. Therefore provider/client HTTP failures
-   must remain retryable audit outcomes rather than crashing the whole evidence run.
+   2026-08 known-good control returned HTTP 503. Provider/client HTTP failures therefore
+   remain retryable audit outcomes rather than silently becoming `no_capture`.
+7. Stage B v0.3 completed cleanly and resolved the Common Crawl decision. Workflow run
+   `34521747701`, launch commit `5b0ba65eaf6e308e5bfe7ea8fc94372b70a800b3`, reused the
+   eight definitive v0.2 checkpoints and retried four inconclusive top-URL checkpoints with
+   conservative pacing. Final result: 12 URLs considered, 12 definitive `no_capture`, zero
+   transport failures, zero captures, across the 12 pilot questions that had GDELT
+   discovery. Artifact `commoncrawl-capture-index-v0.3`, artifact ID `10170048460`, digest
+   `sha256:22875bee30fc53344cdd2425e0f9960c8244df8de314c78efbf09062782523e8`.
+   This is sufficient to stop spending pilot requests on Common Crawl exact-page coverage.
 
-## Current experiment: Stage B v0.3
+## Current experiment: Wayback/CDX Stage B fallback v0.1
 
-The immediate task remains measuring archive coverage without confusing provider failure
-with absence. Stage B v0.3 is a bounded recovery run, not a full sweep.
+The preregistered v0.3 decision rule now points to the Internet Archive Wayback CDX route.
+The first Wayback experiment is deliberately bounded to the same top discovered URL for
+all 12 development questions with GDELT evidence. It measures archive coverage and
+transport health only; it does not download archived page bodies and does not run a model.
 
-Current recovery changes:
+Wayback v0.1 requirements:
 
-- Stage B v0.2 is frozen as a manual-only historical workflow.
-- `CaptureIndexCommonCrawlClient` now treats unexpected Common Crawl 4xx responses as
-  collection-level incomplete lookups. It records the HTTP status/body excerpt, continues
-  to other eligible collections, and returns a retryable `CommonCrawlTransportError` if no
-  valid capture can make the lookup conclusive.
-- A regression test covers the exact `400 on one collection + 404 on another` case and
-  requires it to remain an auditable incomplete lookup rather than a fatal pipeline error.
-- Stage B v0.3 seeds from the partial v0.2 artifact, reuses the 8 definitive no-capture
-  checkpoints, and retries only the inconclusive top-URL lookups.
-- v0.3 uses two eligible collections, 20-second request timeouts, three retries, five-second
-  exponential backoff, and an eight-second minimum request interval.
-- Stage B v0.3 workflow run: `34521747701`.
-- Launch commit: `5b0ba65eaf6e308e5bfe7ea8fc94372b70a800b3`.
-- Holdout remains deleted before any archive lookup.
+- use the identical frozen development benchmark and GDELT v0.4 discovery artifact;
+- remove every holdout file before any archive request;
+- inspect only the first unique discovered article URL per pilot question;
+- query only captures at or before each question's frozen `source_cutoff_at`;
+- require HTTP 200 HTML captures and exact normalized host/path matching;
+- classify every lookup as `capture`, `no_capture`, or `transport_failure`;
+- never translate HTTP 429, unexpected HTTP 4xx, HTTP 5xx, malformed responses, or network
+  failures into `no_capture`;
+- checkpoint each lookup and emit deterministic JSONL, CSV audit, and summary artifacts;
+- fetch no archived article body during this coverage pilot.
 
-## Decision after Stage B v0.3
+Wayback fallback launch:
 
-- If transport failures become rare and one or more real captures appear, keep the hardened
-  Common Crawl path and resumably expand Stage B across more of the 111 frozen URLs and
-  additional eligible collections.
-- If the bounded top-URL sample completes cleanly but still produces zero captures, treat
-  exact-page Common Crawl coverage as weak for this GDELT-derived sample and move to the
-  Wayback/CDX fallback rather than spending more requests proving the same point.
-- If provider instability still dominates despite conservative pacing, also move to the
-  Wayback/CDX fallback. A timeout, HTTP 429, HTTP 4xx provider failure, HTTP 5xx, or
-  incomplete collection search is never `no_capture`.
-- Do not proceed to model forecasting merely because a workflow exits green.
+- Workflow: `.github/workflows/wayback-capture-index-v0.1.yml`
+- Launch commit: `c8025ee0b480a7a2eee78e58513aa43d6f49bc13`
+- Workflow run: `34525534259`
+- Planned artifact: `wayback-capture-index-v0.1`
+
+## Decision after Wayback v0.1
+
+- If Wayback yields real pre-cutoff captures with acceptable transport reliability, promote
+  the inline pilot into a tested reusable archive client/stage, then resumably expand across
+  more of the 111 frozen GDELT URLs before fetching bodies.
+- If Wayback transport is unreliable, harden request pacing/retries once and repeat the same
+  frozen top-URL pilot before changing the evidence sample.
+- If Wayback is reliable but exact-page capture coverage is also effectively zero, stop
+  treating these GDELT article URLs as a viable historical-evidence source and redesign the
+  historical source strategy rather than weakening timestamp or page-identity rules.
+- Do not run historical model forecasts until a defensible historical evidence corpus exists.
 
 ## Later sequence
 
