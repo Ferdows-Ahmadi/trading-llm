@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 from collections.abc import Mapping
@@ -66,6 +67,53 @@ When evidence is weak or absent, express that uncertainty in the probability and
 """
 
 
+def _allowed_source_ids(request: Mapping[str, object]) -> tuple[str, ...]:
+    evidence = request.get("evidence")
+    if not isinstance(evidence, Mapping):
+        raise ResearchContractError("Ollama adapter requires an evidence packet")
+    items = evidence.get("evidence_items")
+    if not isinstance(items, list):
+        raise ResearchContractError("Ollama adapter requires evidence_items")
+
+    source_ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ResearchContractError("Ollama evidence items must be objects")
+        source_id = item.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            raise ResearchContractError("Ollama evidence items require non-empty source_id")
+        if source_id in seen:
+            raise ResearchContractError(f"Duplicate evidence source_id: {source_id!r}")
+        seen.add(source_id)
+        source_ids.append(source_id)
+    return tuple(source_ids)
+
+
+def _schema_for_request(request: Mapping[str, object]) -> dict[str, object]:
+    """Constrain citations to the exact evidence IDs supplied for this question."""
+
+    allowed_source_ids = _allowed_source_ids(request)
+    schema = copy.deepcopy(STRUCTURED_FORECAST_SCHEMA)
+    properties = schema["properties"]
+    if not isinstance(properties, dict):
+        raise ResearchContractError("Forecast schema properties are malformed")
+    citation_schema = properties.get("cited_source_ids")
+    if not isinstance(citation_schema, dict):
+        raise ResearchContractError("Forecast citation schema is malformed")
+
+    citation_schema["maxItems"] = len(allowed_source_ids)
+    if allowed_source_ids:
+        citation_schema["items"] = {
+            "type": "string",
+            "enum": list(allowed_source_ids),
+        }
+    else:
+        # An empty enum is invalid JSON Schema. maxItems=0 makes [] the only valid array.
+        citation_schema["items"] = {"type": "string"}
+    return schema
+
+
 class OllamaStructuredModelAdapter:
     """Strict local Ollama adapter for one structured historical forecast response."""
 
@@ -103,7 +151,7 @@ class OllamaStructuredModelAdapter:
 
     def generate(self, request: Mapping[str, object]) -> Mapping[str, object]:
         payload: dict[str, object] = {
-            "format": STRUCTURED_FORECAST_SCHEMA,
+            "format": _schema_for_request(request),
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
