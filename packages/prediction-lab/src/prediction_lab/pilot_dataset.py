@@ -4,7 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from prediction_lab.datasets import DatasetFreezeError, DatasetManifest, freeze_cases, verify_frozen_dataset
+from prediction_lab.datasets import (
+    DatasetFreezeError,
+    DatasetManifest,
+    freeze_cases,
+    verify_frozen_dataset,
+)
 
 
 def _discovery_question_ids(path: str | Path) -> tuple[str, ...]:
