@@ -1,0 +1,264 @@
+name: Development Forecast Smoke v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/development-forecast-smoke-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/experiments.py
+      - packages/prediction-lab/src/prediction_lab/research_cli.py
+      - packages/prediction-lab/src/prediction_lab/research_forecaster.py
+      - packages/prediction-lab/src/prediction_lab/research_types.py
+      - packages/prediction-lab/src/prediction_lab/evidence.py
+      - packages/prediction-lab/src/prediction_lab/evaluation.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke-development-forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen 20-question development pilot
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-development-pilot-v0.1
+          path: ${{ runner.temp }}/development-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34555783305
+
+      - name: Download frozen relevance-filtered historical evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: evidence-relevance-filter-v0.1
+          path: ${{ runner.temp }}/filtered-evidence
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34529685281
+
+      - name: Verify sealed development inputs
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from prediction_lab.datasets import verify_frozen_dataset
+          from prediction_lab.evidence import FileEvidenceProvider
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          pilot_dir = root / "development-pilot"
+          evidence_dir = root / "filtered-evidence"
+          pilot_csv = pilot_dir / "development-pilot.csv"
+          pilot_manifest = pilot_dir / "development-pilot.manifest.json"
+          fixture_path = evidence_dir / "evidence-fixture.filtered.json"
+          relevance_path = evidence_dir / "relevance-summary.json"
+
+          forbidden = [
+              path
+              for directory in (pilot_dir, evidence_dir)
+              for path in directory.rglob("holdout*")
+          ]
+          if forbidden:
+              raise SystemExit(f"holdout material found in smoke inputs: {forbidden}")
+
+          frame = verify_frozen_dataset(
+              csv_path=pilot_csv,
+              manifest_path=pilot_manifest,
+          )
+          if len(frame) != 20 or frame["question_id"].nunique() != 20:
+              raise SystemExit("frozen smoke pilot is not exactly 20 unique questions")
+          if set(frame["split"].astype(str)) != {"development"}:
+              raise SystemExit("non-development row found in frozen smoke pilot")
+
+          fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+          relevance = json.loads(relevance_path.read_text(encoding="utf-8"))
+          FileEvidenceProvider(fixture_path)
+
+          expected_fixture_hash = (
+              "6c5d203feb47b13f15cfe46bbf58d327629544bd9aba61bfed140c30feb92108"
+          )
+          if relevance.get("filtered_fixture_hash") != expected_fixture_hash:
+              raise SystemExit("filtered evidence fixture identity changed")
+          if relevance.get("method_version") != "lexical-relevance-v1":
+              raise SystemExit("unexpected relevance-filter method")
+          if int(relevance.get("pilot_questions", -1)) != 20:
+              raise SystemExit("relevance artifact is not the frozen 20-question pilot")
+          if int(relevance.get("kept_items", -1)) != 16:
+              raise SystemExit("filtered evidence item count changed")
+          if int(relevance.get("questions_with_kept", -1)) != 8:
+              raise SystemExit("filtered evidence question coverage changed")
+
+          pilot_ids = set(frame["question_id"].astype(str))
+          fixture_questions = fixture.get("questions")
+          if not isinstance(fixture_questions, dict):
+              raise SystemExit("filtered evidence fixture lacks questions mapping")
+          fixture_ids = set(fixture_questions)
+          if fixture_ids != pilot_ids:
+              raise SystemExit("pilot and evidence question IDs do not match exactly")
+
+          print("sealed input verification passed")
+          print("development questions:", len(frame))
+          print("filtered evidence items:", relevance["kept_items"])
+          print("questions with relevant evidence:", relevance["questions_with_kept"])
+          print("questions without relevant evidence:", relevance["questions_without_kept"])
+          print("filtered fixture hash:", expected_fixture_hash)
+          PY
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "checkout became dirty before the smoke experiment" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+      - name: Run blind deterministic forecast smoke
+        run: |
+          prediction-lab-research \
+            "$RUNNER_TEMP/development-pilot/development-pilot.csv" \
+            "$RUNNER_TEMP/development-pilot/development-pilot.manifest.json" \
+            "$RUNNER_TEMP/filtered-evidence/evidence-fixture.filtered.json" \
+            "$RUNNER_TEMP/smoke-output/blind" \
+            --experiment-id development-forecast-smoke-v0.1-blind \
+            --hypothesis "Smoke-only: the deterministic adapter completes the sealed development forecasting chain." \
+            --prompt-version research-v0 \
+            --mode blind \
+            --adapter fake \
+            --repository-root .
+
+      - name: Run market-aware deterministic forecast smoke
+        run: |
+          prediction-lab-research \
+            "$RUNNER_TEMP/development-pilot/development-pilot.csv" \
+            "$RUNNER_TEMP/development-pilot/development-pilot.manifest.json" \
+            "$RUNNER_TEMP/filtered-evidence/evidence-fixture.filtered.json" \
+            "$RUNNER_TEMP/smoke-output/market-aware" \
+            --experiment-id development-forecast-smoke-v0.1-market-aware \
+            --hypothesis "Smoke-only: the deterministic adapter completes the sealed development forecasting chain." \
+            --prompt-version research-v0 \
+            --mode market-aware \
+            --adapter fake \
+            --repository-root .
+
+      - name: Verify both smoke reports and immutable artifacts
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          from prediction_lab.research_types import ForecastArtifact
+
+          output_root = Path(os.environ["RUNNER_TEMP"]) / "smoke-output"
+          expected_commit = os.environ["GITHUB_SHA"]
+          smoke_summary = {
+              "schema_version": 1,
+              "purpose": "orchestration-only; deterministic fake model has no forecasting skill",
+              "head_sha": expected_commit,
+              "modes": {},
+          }
+
+          for mode in ("blind", "market-aware"):
+              mode_root = output_root / mode
+              reports = sorted((mode_root / "reports").glob("*.json"))
+              artifacts = sorted((mode_root / "artifacts").glob("*.json"))
+              failures = sorted((mode_root / "failures").glob("*.json"))
+              evidence = sorted((mode_root / "evidence").glob("*.json"))
+
+              if len(reports) != 1:
+                  raise SystemExit(f"{mode}: expected one immutable report, got {len(reports)}")
+              if len(artifacts) != 20:
+                  raise SystemExit(f"{mode}: expected 20 forecast artifacts, got {len(artifacts)}")
+              if failures:
+                  raise SystemExit(f"{mode}: smoke created {len(failures)} failure artifacts")
+              if len(evidence) != 20:
+                  raise SystemExit(f"{mode}: expected 20 persisted evidence packets")
+
+              report = json.loads(reports[0].read_text(encoding="utf-8"))
+              execution = report.get("execution", {})
+              if execution.get("total_questions") != 20:
+                  raise SystemExit(f"{mode}: report question count changed")
+              if execution.get("successful_forecasts") != 20:
+                  raise SystemExit(f"{mode}: not all forecasts succeeded")
+              if execution.get("failed_forecasts") != 0:
+                  raise SystemExit(f"{mode}: failed forecast ledger is non-zero")
+              if float(execution.get("forecast_coverage", 0.0)) != 1.0:
+                  raise SystemExit(f"{mode}: forecast coverage is not 100%")
+              if report.get("config", {}).get("mode") != mode:
+                  raise SystemExit(f"{mode}: report mode mismatch")
+              if report.get("config", {}).get("dataset_role") != "development-only":
+                  raise SystemExit(f"{mode}: report is not development-only")
+              if report.get("code_commit") != expected_commit:
+                  raise SystemExit(
+                      f"{mode}: dirty or unexpected code commit {report.get('code_commit')!r}"
+                  )
+              metadata = report.get("model_metadata", {})
+              if metadata.get("model_id") != "deterministic-fake":
+                  raise SystemExit(f"{mode}: unexpected smoke model")
+              if metadata.get("contamination_assessment") != "historical-safe":
+                  raise SystemExit(f"{mode}: historical model preflight was not safe")
+              if report.get("evaluation") is None:
+                  raise SystemExit(f"{mode}: evaluator did not run")
+
+              question_ids = set()
+              for artifact_path in artifacts:
+                  value = json.loads(artifact_path.read_text(encoding="utf-8"))
+                  artifact = ForecastArtifact.from_dict(value)
+                  if artifact.blind_or_market_aware != mode:
+                      raise SystemExit(f"{mode}: artifact mode mismatch")
+                  if artifact.code_commit != expected_commit:
+                      raise SystemExit(f"{mode}: artifact code commit mismatch")
+                  if not math.isfinite(artifact.final_probability):
+                      raise SystemExit(f"{mode}: non-finite probability")
+                  if not 0.0 <= artifact.final_probability <= 1.0:
+                      raise SystemExit(f"{mode}: probability outside [0, 1]")
+                  question_ids.add(artifact.question_id)
+              if len(question_ids) != 20:
+                  raise SystemExit(f"{mode}: forecast artifacts do not cover 20 unique questions")
+
+              smoke_summary["modes"][mode] = {
+                  "report_content_hash": reports[0].stem,
+                  "run_identity_hash": report["run_identity_hash"],
+                  "experiment_config_hash": report["experiment_config_hash"],
+                  "execution": execution,
+                  "evaluation": report["evaluation"],
+              }
+              print(f"{mode} execution:", json.dumps(execution, sort_keys=True))
+              print(f"{mode} evaluation:", json.dumps(report["evaluation"], sort_keys=True))
+              print(f"{mode} report hash:", reports[0].stem)
+
+          summary_path = output_root / "smoke-summary.json"
+          summary_path.write_text(
+              json.dumps(smoke_summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print("smoke summary:")
+          print(summary_path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Upload hosted development forecast smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: development-forecast-smoke-v0.1
+          path: ${{ runner.temp }}/smoke-output/
+          if-no-files-found: error
+          retention-days: 14
