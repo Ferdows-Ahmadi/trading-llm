@@ -25,6 +25,25 @@ def _metadata(*, immutable_version: str) -> ModelMetadata:
     )
 
 
+def _request(*source_ids: str) -> dict[str, object]:
+    return {
+        "evidence": {
+            "evidence_items": [
+                {
+                    "available_at": "2025-01-01T00:00:00Z",
+                    "source_id": source_id,
+                    "source_type": "wayback-archived-news",
+                    "text": "Historical evidence.",
+                    "title": "Historical source",
+                }
+                for source_id in source_ids
+            ]
+        },
+        "mode": "blind",
+        "question": {"question_id": "q1", "text": "Will X happen?"},
+    }
+
+
 def test_ollama_adapter_posts_strict_structured_request() -> None:
     captured: dict[str, object] = {}
 
@@ -54,13 +73,7 @@ def test_ollama_adapter_posts_strict_structured_request() -> None:
         metadata=_metadata(immutable_version="sha256:" + "a" * 64),
         client=http_client,
     )
-    result = adapter.generate(
-        {
-            "evidence": {"evidence_items": []},
-            "mode": "blind",
-            "question": {"question_id": "q1", "text": "Will X happen?"},
-        }
-    )
+    result = adapter.generate(_request("source-1", "source-2"))
 
     assert result["final_probability"] == 0.55
     assert captured["url"] == "http://127.0.0.1:11434/api/chat"
@@ -68,13 +81,85 @@ def test_ollama_adapter_posts_strict_structured_request() -> None:
     assert isinstance(body, dict)
     assert body["stream"] is False
     assert body["options"] == {"seed": 0, "temperature": 0}
-    assert isinstance(body["format"], dict)
-    assert body["format"]["additionalProperties"] is False
+    schema = body["format"]
+    assert isinstance(schema, dict)
+    assert schema["additionalProperties"] is False
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    citations = properties["cited_source_ids"]
+    assert citations["maxItems"] == 2
+    assert citations["items"] == {
+        "type": "string",
+        "enum": ["source-1", "source-2"],
+    }
     messages = body["messages"]
     assert isinstance(messages, list)
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
+    http_client.close()
+
+
+def test_ollama_adapter_forces_empty_citations_when_question_has_no_evidence() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        output = {
+            "base_rate_probability": 0.4,
+            "updated_probability": 0.4,
+            "final_probability": 0.4,
+            "confidence_or_uncertainty": "high uncertainty",
+            "critique": "No evidence was supplied.",
+            "cited_source_ids": [],
+        }
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": json.dumps(output)}},
+            request=request,
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    adapter = OllamaStructuredModelAdapter(
+        model="llama3.1:8b",
+        metadata=_metadata(immutable_version="sha256:" + "c" * 64),
+        client=http_client,
+    )
+    result = adapter.generate(_request())
+
+    assert result["cited_source_ids"] == []
+    body = captured["body"]
+    assert isinstance(body, dict)
+    schema = body["format"]
+    assert isinstance(schema, dict)
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    citations = properties["cited_source_ids"]
+    assert citations["maxItems"] == 0
+    assert citations["items"] == {"type": "string"}
+    http_client.close()
+
+
+def test_ollama_adapter_rejects_duplicate_or_malformed_source_ids_before_request() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, request=request)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    adapter = OllamaStructuredModelAdapter(
+        model="llama3.1:8b",
+        metadata=_metadata(immutable_version="sha256:" + "d" * 64),
+        client=http_client,
+    )
+
+    with pytest.raises(ResearchContractError, match="Duplicate evidence source_id"):
+        adapter.generate(_request("source-1", "source-1"))
+    with pytest.raises(ResearchContractError, match="requires evidence_items"):
+        adapter.generate({"evidence": {}, "question": {"question_id": "q1"}})
+    assert calls == 0
     http_client.close()
 
 
@@ -102,5 +187,5 @@ def test_ollama_adapter_rejects_non_json_content() -> None:
         client=http_client,
     )
     with pytest.raises(ResearchContractError, match="not valid JSON"):
-        adapter.generate({"question": {"question_id": "q1"}})
+        adapter.generate(_request())
     http_client.close()
