@@ -68,8 +68,7 @@ def _capture(executable: str, args: list[str], *, cwd: Path) -> str:
             cwd=cwd,
             check=True,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
@@ -119,7 +118,8 @@ def _assert_loopback_ollama(base_url: str) -> None:
         raise ResearchContractError("Ollama base URL must use http or https")
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise ResearchContractError(
-            "Scientific local run requires a loopback Ollama endpoint; remote model endpoints are blocked"
+            "Scientific local run requires a loopback Ollama endpoint; "
+            "remote model endpoints are blocked"
         )
 
 
@@ -239,7 +239,9 @@ def _validate_frozen_inputs(pilot_dir: Path, evidence_dir: Path) -> tuple[Path, 
         for path in directory.rglob("holdout*")
     ]
     if forbidden:
-        raise ResearchContractError(f"Holdout material found in local development inputs: {forbidden}")
+        raise ResearchContractError(
+            f"Holdout material found in local development inputs: {forbidden}"
+        )
 
     pilot_csv = pilot_dir / "development-pilot.csv"
     pilot_manifest = pilot_dir / "development-pilot.manifest.json"
