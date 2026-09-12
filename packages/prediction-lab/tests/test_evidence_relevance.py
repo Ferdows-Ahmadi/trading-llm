@@ -102,7 +102,10 @@ def test_filter_v2_is_structural_label_blind_and_preserves_empty_questions(
                 _item(
                     "titan-lead",
                     "Protocol roadmap update",
-                    "Titan plans a token launch this spring. Titan also published its rollout schedule.",
+                    (
+                        "Titan plans a token launch this spring. "
+                        "Titan also published its rollout schedule."
+                    ),
                 )
             ],
             "q4": [
