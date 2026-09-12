@@ -1,5 +1,6 @@
 name: Hosted Llama 3.1 8B Market Residual v0.5
 
+# Retry after lint-only formatting fixes; preregistered method is unchanged.
 on:
   push:
     branches:
