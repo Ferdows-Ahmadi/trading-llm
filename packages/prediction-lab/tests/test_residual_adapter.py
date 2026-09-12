@@ -6,13 +6,13 @@ import math
 import httpx
 import pytest
 
+from prediction_lab.research_types import ModelMetadata, ResearchContractError
 from prediction_lab.residual_adapter import (
     MAX_ABS_LOGIT_DELTA,
     RESIDUAL_MAPPING_VERSION,
     OllamaMarketResidualAdapter,
     residual_probability,
 )
-from prediction_lab.research_types import ModelMetadata, ResearchContractError
 
 
 def _metadata() -> ModelMetadata:
