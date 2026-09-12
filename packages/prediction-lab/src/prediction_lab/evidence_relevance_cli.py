@@ -11,7 +11,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Filter frozen historical evidence with a deterministic, label-blind "
-            "lexical relevance rule."
+            "structural relevance rule."
         )
     )
     parser.add_argument("benchmark_csv", type=Path)
@@ -19,7 +19,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("evidence_fixture", type=Path)
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--max-items-per-question", type=int, default=5)
-    parser.add_argument("--context-chars", type=int, default=260)
+    parser.add_argument("--lead-words", type=int, default=40)
+    parser.add_argument("--intent-window-words", type=int, default=50)
+    parser.add_argument("--min-body-subject-mentions", type=int, default=2)
     return parser
 
 
@@ -31,7 +33,9 @@ def main() -> None:
         evidence_fixture=args.evidence_fixture,
         output_directory=args.output_directory,
         max_items_per_question=args.max_items_per_question,
-        context_chars=args.context_chars,
+        lead_words=args.lead_words,
+        intent_window_words=args.intent_window_words,
+        min_body_subject_mentions=args.min_body_subject_mentions,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
 
