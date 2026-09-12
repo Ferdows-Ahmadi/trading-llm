@@ -4,12 +4,12 @@ import copy
 
 import pytest
 
+from prediction_lab.research_types import ResearchContractError
 from prediction_lab.residual_development_cli import (
     EXPECTED_EVIDENCE,
     PREREGISTRATION_COMMIT,
     _assert_preregistered_evidence_spec,
 )
-from prediction_lab.research_types import ResearchContractError
 
 
 def test_preregistered_residual_evidence_lineage_is_exact() -> None:
