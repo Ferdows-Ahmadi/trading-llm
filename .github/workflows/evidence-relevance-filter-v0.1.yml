@@ -1,15 +1,6 @@
-name: Evidence Relevance Filter v0.1
+name: Evidence Relevance Filter v0.1 (legacy)
 
 on:
-  push:
-    branches:
-      - research/prediction-market-lab-v0.1
-    paths:
-      - .github/workflows/evidence-relevance-filter-v0.1.yml
-      - packages/prediction-lab/src/prediction_lab/evidence_relevance.py
-      - packages/prediction-lab/src/prediction_lab/evidence_relevance_cli.py
-      - packages/prediction-lab/tests/test_evidence_relevance.py
-      - packages/prediction-lab/pyproject.toml
   workflow_dispatch:
 
 permissions:
@@ -111,7 +102,7 @@ jobs:
           print("raw frozen evidence items:", content["frozen_items"])
           PY
 
-      - name: Apply preregistered label-blind relevance filter
+      - name: Apply legacy relevance filter
         run: |
           prediction-lab-filter-evidence \
             benchmark/development.csv \
@@ -121,46 +112,10 @@ jobs:
             --max-items-per-question 5 \
             --context-chars 260
 
-      - name: Verify filtered fixture
-        run: |
-          cat filtered-evidence/relevance-summary.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          from prediction_lab.evidence import FileEvidenceProvider
-
-          summary = json.loads(
-              Path("filtered-evidence/relevance-summary.json").read_text(encoding="utf-8")
-          )
-          fixture = json.loads(
-              Path("filtered-evidence/evidence-fixture.filtered.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          FileEvidenceProvider("filtered-evidence/evidence-fixture.filtered.json")
-
-          if summary.get("method_version") != "lexical-relevance-v1":
-              raise SystemExit("unexpected relevance method version")
-          if int(summary.get("pilot_questions", -1)) != 20:
-              raise SystemExit("filtered fixture did not preserve all 20 pilot questions")
-          if int(summary.get("raw_items", -1)) != 94:
-              raise SystemExit("relevance filter did not inspect all 94 frozen evidence items")
-          if len(fixture.get("questions", {})) != 20:
-              raise SystemExit("filtered fixture does not contain exactly 20 explicit questions")
-          if int(summary.get("kept_items", 0)) > 100:
-              raise SystemExit("filtered evidence count is impossible")
-
-          print("filtered fixture hash:", summary["filtered_fixture_hash"])
-          print("questions with relevant evidence:", summary["questions_with_kept"])
-          print("questions without relevant evidence:", summary["questions_without_kept"])
-          print("kept evidence items:", summary["kept_items"])
-          PY
-
       - name: Upload relevance-filtered evidence artifact
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-relevance-filter-v0.1
+          name: evidence-relevance-filter-v0.1-legacy-rerun
           path: filtered-evidence/
           if-no-files-found: error
           retention-days: 14
