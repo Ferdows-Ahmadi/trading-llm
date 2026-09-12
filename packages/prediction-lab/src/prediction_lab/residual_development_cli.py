@@ -26,13 +26,13 @@ from prediction_lab.local_development_cli import (
     _validate_frozen_inputs,
 )
 from prediction_lab.ollama_adapter import OllamaStructuredModelAdapter
+from prediction_lab.research_types import ResearchContractError, content_hash
 from prediction_lab.residual_adapter import (
     MAX_ABS_LOGIT_DELTA,
     RESIDUAL_MAPPING_VERSION,
     STRENGTH_TO_ABS_DELTA,
     OllamaMarketResidualAdapter,
 )
-from prediction_lab.research_types import ResearchContractError, content_hash
 
 PREREGISTRATION_COMMIT = "271a0866d1c2ebd4ffa70275f7d187e776fcdc75"
 DEFAULT_EVIDENCE_SPEC = Path("docs/experiments/evidence-relevance-v2-canonical.json")
