@@ -199,7 +199,8 @@ def _assess_item(
     title_hit = _contains_subsequence(title_tokens, subject_tokens)
     body_starts = _subsequence_starts(body_tokens, subject_tokens)
     body_mentions = len(body_starts)
-    lead_hit = _contains_subsequence(body_tokens[:lead_words], subject_tokens)
+    lead_text = " ".join(item.text.split()[:lead_words])
+    lead_hit = _contains_subsequence(_word_tokens(lead_text), subject_tokens)
     roundup_match = _roundup_pattern(item.title)
 
     if not title_hit and body_mentions == 0:
