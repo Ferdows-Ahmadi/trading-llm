@@ -13,8 +13,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout
+      - name: Checkout frozen v0.1 implementation
         uses: actions/checkout@v4
+        with:
+          ref: 3eb00976a4043ed160fec17976cfaf2f156525ab
 
       - name: Set up Python
         uses: actions/setup-python@v5
