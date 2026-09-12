@@ -100,6 +100,36 @@ def test_ollama_adapter_posts_strict_structured_request() -> None:
     http_client.close()
 
 
+def test_ollama_adapter_deduplicates_repeated_valid_citation_ids() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        output = {
+            "base_rate_probability": 0.4,
+            "updated_probability": 0.6,
+            "final_probability": 0.55,
+            "confidence_or_uncertainty": "moderate uncertainty",
+            "critique": "Evidence is sparse.",
+            "cited_source_ids": ["source-1", "source-1", "source-2", "source-1"],
+        }
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": json.dumps(output)}},
+            request=request,
+        )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    adapter = OllamaStructuredModelAdapter(
+        model="llama3.1:8b",
+        metadata=_metadata(immutable_version="sha256:" + "e" * 64),
+        client=http_client,
+    )
+
+    result = adapter.generate(_request("source-1", "source-2"))
+
+    assert result["cited_source_ids"] == ["source-1", "source-2"]
+    assert result["final_probability"] == 0.55
+    http_client.close()
+
+
 def test_ollama_adapter_forces_empty_citations_when_question_has_no_evidence() -> None:
     captured: dict[str, object] = {}
 
