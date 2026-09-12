@@ -8,7 +8,10 @@ from pathlib import Path
 
 from prediction_lab.research_types import EvidenceItem, ResearchContractError, content_hash
 
-METHOD_VERSION = "lexical-relevance-v1"
+METHOD_VERSION = "lexical-relevance-v2"
+DEFAULT_LEAD_WORDS = 40
+DEFAULT_INTENT_WINDOW_WORDS = 50
+DEFAULT_MIN_BODY_SUBJECT_MENTIONS = 2
 
 _INTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^(?P<subject>.+?)\s+FDV\b", re.IGNORECASE), "fdv"),
@@ -81,6 +84,25 @@ _INTENT_SIGNALS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_ROUNDUP_TITLE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("top_n", re.compile(r"\btop\s+\d+\b", re.IGNORECASE)),
+    (
+        "n_items_to_watch",
+        re.compile(
+            r"\b\d+\s+(?:crypto|cryptos|tokens?|coins?|projects?)\s+to\s+watch\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "periodic_roundup",
+        re.compile(
+            r"\b(?:daily|weekly|market|crypto)\s+(?:market\s+)?roundup\b",
+            re.IGNORECASE,
+        ),
+    ),
+    ("key_crypto_updates", re.compile(r"\bkey\s+crypto\s+updates?\b", re.IGNORECASE)),
+)
+
 
 def _normalize(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold()
@@ -88,6 +110,25 @@ def _normalize(value: str) -> str:
 
 def _title_fingerprint(value: str) -> str:
     return re.sub(r"[\W_]+", " ", _normalize(value), flags=re.UNICODE).strip()
+
+
+def _word_tokens(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\w+|[$%]", _normalize(value), flags=re.UNICODE))
+
+
+def _subsequence_starts(tokens: tuple[str, ...], needle: tuple[str, ...]) -> tuple[int, ...]:
+    if not needle or len(needle) > len(tokens):
+        return ()
+    width = len(needle)
+    return tuple(
+        index
+        for index in range(len(tokens) - width + 1)
+        if tokens[index : index + width] == needle
+    )
+
+
+def _contains_subsequence(tokens: tuple[str, ...], needle: tuple[str, ...]) -> bool:
+    return bool(_subsequence_starts(tokens, needle))
 
 
 def extract_question_subject(question_text: str) -> tuple[str, str]:
@@ -103,42 +144,98 @@ def extract_question_subject(question_text: str) -> tuple[str, str]:
     )
 
 
-def _subject_positions(text: str, subject: str) -> tuple[str, list[int]]:
-    normalized = _normalize(text)
-    normalized_subject = _normalize(subject)
-    pattern = re.compile(r"(?<![\w])" + re.escape(normalized_subject) + r"(?![\w])")
-    return normalized, [match.start() for match in pattern.finditer(normalized)]
+def _roundup_pattern(title: str) -> str | None:
+    for name, pattern in _ROUNDUP_TITLE_PATTERNS:
+        if pattern.search(title):
+            return name
+    return None
 
 
-def _score_item(
+def _intent_signals_near_subject(
+    *,
+    title_tokens: tuple[str, ...],
+    body_tokens: tuple[str, ...],
+    subject_tokens: tuple[str, ...],
+    intent: str,
+    intent_window_words: int,
+) -> tuple[str, ...]:
+    combined = title_tokens + body_tokens
+    subject_starts = _subsequence_starts(combined, subject_tokens)
+    if not subject_starts:
+        return ()
+
+    signal_tokens = {
+        signal: _word_tokens(signal) for signal in _INTENT_SIGNALS[intent]
+    }
+    hits: set[str] = set()
+    for start in subject_starts:
+        left = max(0, start - intent_window_words)
+        right = min(
+            len(combined),
+            start + len(subject_tokens) + intent_window_words,
+        )
+        window = combined[left:right]
+        for signal, tokens in signal_tokens.items():
+            if tokens and _contains_subsequence(window, tokens):
+                hits.add(signal)
+    return tuple(sorted(hits))
+
+
+def _assess_item(
     item: EvidenceItem,
     *,
     subject: str,
     intent: str,
-    context_chars: int,
-) -> tuple[int, tuple[str, ...], bool, str | None]:
-    combined = f"{item.title}\n{item.text}"
-    normalized, positions = _subject_positions(combined, subject)
-    if not positions:
-        return 0, (), False, "subject_not_found"
+    lead_words: int,
+    intent_window_words: int,
+    min_body_subject_mentions: int,
+) -> tuple[tuple[str, ...], bool, bool, int, str | None, str | None]:
+    subject_tokens = _word_tokens(subject)
+    title_tokens = _word_tokens(item.title)
+    body_tokens = _word_tokens(item.text)
+    if not subject_tokens:
+        raise ResearchContractError(f"Question subject has no lexical tokens: {subject!r}")
 
-    normalized_subject = _normalize(subject)
-    signals: set[str] = set()
-    for position in positions:
-        start = max(0, position - context_chars)
-        end = position + len(normalized_subject) + context_chars
-        window = normalized[start:end]
-        for signal in _INTENT_SIGNALS[intent]:
-            if signal in window:
-                signals.add(signal)
+    title_hit = _contains_subsequence(title_tokens, subject_tokens)
+    body_starts = _subsequence_starts(body_tokens, subject_tokens)
+    body_mentions = len(body_starts)
+    lead_hit = _contains_subsequence(body_tokens[:lead_words], subject_tokens)
+    roundup_match = _roundup_pattern(item.title)
 
+    if not title_hit and body_mentions == 0:
+        return (), title_hit, lead_hit, body_mentions, roundup_match, "subject_not_found"
+    if roundup_match is not None:
+        return (), title_hit, lead_hit, body_mentions, roundup_match, "roundup_or_listicle"
+    if not title_hit and not lead_hit:
+        return (), title_hit, lead_hit, body_mentions, roundup_match, "subject_not_prominent"
+    if not title_hit and body_mentions < min_body_subject_mentions:
+        return (
+            (),
+            title_hit,
+            lead_hit,
+            body_mentions,
+            roundup_match,
+            "insufficient_subject_mentions",
+        )
+
+    signals = _intent_signals_near_subject(
+        title_tokens=title_tokens,
+        body_tokens=body_tokens,
+        subject_tokens=subject_tokens,
+        intent=intent,
+        intent_window_words=intent_window_words,
+    )
     if not signals:
-        return 0, (), False, "no_intent_signal_near_subject"
+        return (
+            (),
+            title_hit,
+            lead_hit,
+            body_mentions,
+            roundup_match,
+            "no_intent_signal_near_subject",
+        )
 
-    _, title_positions = _subject_positions(item.title, subject)
-    title_hit = bool(title_positions)
-    score = 2 * min(3, len(signals)) + (4 if title_hit else 0)
-    return score, tuple(sorted(signals)), title_hit, None
+    return signals, title_hit, lead_hit, body_mentions, roundup_match, None
 
 
 def _read_questions(path: str | Path) -> dict[str, str]:
@@ -198,13 +295,19 @@ def filter_evidence_fixture(
     evidence_fixture: str | Path,
     output_directory: str | Path,
     max_items_per_question: int = 5,
-    context_chars: int = 260,
+    lead_words: int = DEFAULT_LEAD_WORDS,
+    intent_window_words: int = DEFAULT_INTENT_WINDOW_WORDS,
+    min_body_subject_mentions: int = DEFAULT_MIN_BODY_SUBJECT_MENTIONS,
 ) -> dict[str, object]:
-    """Derive a label-blind, deterministic relevance-filtered historical evidence fixture."""
+    """Derive a label-blind, deterministic structural relevance evidence fixture."""
     if max_items_per_question < 1:
         raise ValueError("max_items_per_question must be positive")
-    if context_chars < 50:
-        raise ValueError("context_chars must be at least 50")
+    if lead_words < 1:
+        raise ValueError("lead_words must be positive")
+    if intent_window_words < 1:
+        raise ValueError("intent_window_words must be positive")
+    if min_body_subject_mentions < 1:
+        raise ValueError("min_body_subject_mentions must be positive")
 
     questions = _read_questions(benchmark_csv)
     pilot_ids = _read_pilot_ids(discovery_jsonl)
@@ -243,45 +346,59 @@ def filter_evidence_fixture(
             continue
 
         subject, intent = extract_question_subject(question_text)
-        candidates: list[tuple[int, bool, EvidenceItem, tuple[str, ...]]] = []
+        candidates: list[
+            tuple[bool, bool, int, EvidenceItem, tuple[str, ...]]
+        ] = []
         decisions: dict[str, dict[str, object]] = {}
         for raw_item in raw_items:
             item = EvidenceItem.from_dict(raw_item)
             raw_item_count += 1
-            score, signals, title_hit, reject_reason = _score_item(
+            (
+                signals,
+                title_hit,
+                lead_hit,
+                body_mentions,
+                roundup_match,
+                reject_reason,
+            ) = _assess_item(
                 item,
                 subject=subject,
                 intent=intent,
-                context_chars=context_chars,
+                lead_words=lead_words,
+                intent_window_words=intent_window_words,
+                min_body_subject_mentions=min_body_subject_mentions,
             )
             decisions[item.source_id] = {
                 "available_at": item.available_at.isoformat(),
+                "body_subject_mentions": body_mentions,
                 "intent": intent,
+                "intent_signal_hits": ";".join(signals),
                 "kept": False,
+                "lead_subject_match": lead_hit,
                 "question_id": question_id,
                 "reason": reject_reason or "candidate",
-                "score": score,
-                "signal_hits": ";".join(signals),
+                "roundup_pattern": roundup_match or "",
                 "source_id": item.source_id,
                 "subject": subject,
                 "title": item.title,
                 "title_subject_match": title_hit,
             }
             if reject_reason is None:
-                candidates.append((score, title_hit, item, signals))
+                candidates.append((title_hit, lead_hit, body_mentions, item, signals))
 
         candidates.sort(
             key=lambda candidate: (
-                -candidate[0],
+                -int(candidate[0]),
                 -int(candidate[1]),
-                -candidate[2].available_at.timestamp(),
-                candidate[2].source_id,
+                -candidate[2],
+                -candidate[3].available_at.timestamp(),
+                candidate[3].source_id,
             )
         )
         seen_titles: set[str] = set()
         seen_content: set[str] = set()
         kept = 0
-        for score, title_hit, item, signals in candidates:
+        for title_hit, lead_hit, body_mentions, item, signals in candidates:
             decision = decisions[item.source_id]
             title_key = _title_fingerprint(item.title)
             if item.content_hash in seen_content:
@@ -300,10 +417,11 @@ def filter_evidence_fixture(
             kept += 1
             decision.update(
                 {
+                    "body_subject_mentions": body_mentions,
+                    "intent_signal_hits": ";".join(signals),
                     "kept": True,
+                    "lead_subject_match": lead_hit,
                     "reason": "kept",
-                    "score": score,
-                    "signal_hits": ";".join(signals),
                     "title_subject_match": title_hit,
                 }
             )
@@ -321,9 +439,11 @@ def filter_evidence_fixture(
         "source_id",
         "available_at",
         "title",
-        "score",
         "title_subject_match",
-        "signal_hits",
+        "lead_subject_match",
+        "body_subject_mentions",
+        "intent_signal_hits",
+        "roundup_pattern",
         "kept",
         "reason",
     )
@@ -336,12 +456,14 @@ def filter_evidence_fixture(
     kept_items = sum(len(items) for items in filtered.values())
     questions_with_kept = sum(bool(items) for items in filtered.values())
     summary: dict[str, object] = {
-        "context_chars": context_chars,
         "dropped_items": raw_item_count - kept_items,
         "filtered_fixture_hash": content_hash(filtered_payload),
+        "intent_window_words": intent_window_words,
         "kept_items": kept_items,
+        "lead_words": lead_words,
         "max_items_per_question": max_items_per_question,
         "method_version": METHOD_VERSION,
+        "min_body_subject_mentions": min_body_subject_mentions,
         "pilot_questions": len(pilot_ids),
         "questions_with_kept": questions_with_kept,
         "questions_without_kept": len(pilot_ids) - questions_with_kept,
