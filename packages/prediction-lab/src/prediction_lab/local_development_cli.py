@@ -242,7 +242,9 @@ def _load_evidence_spec(repository_root: Path, spec_path: Path | None) -> dict[s
         raise ResearchContractError("Evidence lineage spec filtered_fixture_sha256 is invalid")
     expected_summary = spec.get("expected_summary")
     if not isinstance(expected_summary, dict) or not expected_summary:
-        raise ResearchContractError("Evidence lineage spec expected_summary must be a non-empty object")
+        raise ResearchContractError(
+            "Evidence lineage spec expected_summary must be a non-empty object"
+        )
 
     for key in ("artifact_code_commit", "preregistration_commit"):
         value = spec.get(key)
