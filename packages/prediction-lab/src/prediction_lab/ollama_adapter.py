@@ -114,6 +114,36 @@ def _schema_for_request(request: Mapping[str, object]) -> dict[str, object]:
     return schema
 
 
+def _deduplicate_cited_source_ids(parsed: dict[str, object]) -> dict[str, object]:
+    """Remove repeated string citation IDs while preserving first-seen order.
+
+    Ollama can occasionally violate JSON Schema ``uniqueItems`` even when every
+    emitted ID is otherwise valid. Repeating the same citation carries no new
+    information and must not turn an otherwise valid probability forecast into
+    a failed forecast. Unknown IDs and malformed non-string values are left in
+    place so downstream contract validation can still reject them.
+    """
+
+    citations = parsed.get("cited_source_ids")
+    if not isinstance(citations, list):
+        return parsed
+
+    deduplicated: list[object] = []
+    seen_strings: set[str] = set()
+    for citation in citations:
+        if isinstance(citation, str):
+            if citation in seen_strings:
+                continue
+            seen_strings.add(citation)
+        deduplicated.append(citation)
+
+    if deduplicated == citations:
+        return parsed
+    normalized = dict(parsed)
+    normalized["cited_source_ids"] = deduplicated
+    return normalized
+
+
 class OllamaStructuredModelAdapter:
     """Strict local Ollama adapter for one structured historical forecast response."""
 
@@ -187,4 +217,4 @@ class OllamaStructuredModelAdapter:
             raise ResearchContractError("Ollama structured content is not valid JSON") from exc
         if not isinstance(parsed, dict):
             raise ResearchContractError("Ollama structured content must be a JSON object")
-        return parsed
+        return _deduplicate_cited_source_ids(parsed)
