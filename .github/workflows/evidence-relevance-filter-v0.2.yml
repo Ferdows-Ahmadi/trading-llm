@@ -1,0 +1,206 @@
+name: Evidence Relevance Filter v0.2
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/evidence-relevance-filter-v0.2.yml
+      - docs/evidence-relevance-v2-preregistration.md
+      - packages/prediction-lab/src/prediction_lab/evidence_relevance.py
+      - packages/prediction-lab/src/prediction_lab/evidence_relevance_cli.py
+      - packages/prediction-lab/tests/test_evidence_relevance.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  filter-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify preregistered v2 implementation
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          grep -F 'Method version: `lexical-relevance-v2`.' docs/evidence-relevance-v2-preregistration.md
+          grep -F 'lead window: 40 body words' docs/evidence-relevance-v2-preregistration.md
+          grep -F 'intent proximity radius: 50 words' docs/evidence-relevance-v2-preregistration.md
+          pytest -q packages/prediction-lab/tests/test_evidence_relevance.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/evidence_relevance.py \
+            packages/prediction-lab/src/prediction_lab/evidence_relevance_cli.py \
+            packages/prediction-lab/tests/test_evidence_relevance.py
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen GDELT discovery pilot
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Download full frozen Wayback evidence corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: wayback-content-freeze-v0.2
+          path: frozen-evidence
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34527997994
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected_benchmark = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual_benchmark = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual_benchmark != expected_benchmark:
+              raise SystemExit(f"development benchmark hash mismatch: {actual_benchmark}")
+
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          holdout_paths = [
+              str(path)
+              for root in (Path("benchmark"), Path("discovery-pilot"), Path("frozen-evidence"))
+              for path in root.rglob("*")
+              if "holdout" in path.name.casefold()
+          ]
+          if holdout_paths:
+              raise SystemExit(f"holdout-named inputs remain: {holdout_paths}")
+
+          discovery_lines = [
+              line
+              for line in Path("discovery-pilot/discovery.jsonl")
+              .read_text(encoding="utf-8")
+              .splitlines()
+              if line.strip()
+          ]
+          if len(discovery_lines) != 20:
+              raise SystemExit(f"expected 20 frozen pilot questions, got {len(discovery_lines)}")
+
+          content = json.loads(
+              Path("frozen-evidence/content-summary.json").read_text(encoding="utf-8")
+          )
+          expected_content = {
+              "selected_capture_items": 100,
+              "frozen_items": 94,
+              "content_failures": 6,
+              "questions_with_content": 12,
+          }
+          for key, value in expected_content.items():
+              if content.get(key) != value:
+                  raise SystemExit(
+                      f"frozen content summary changed for {key}: {content.get(key)!r}"
+                  )
+
+          print("development benchmark sha256:", actual_benchmark)
+          print("holdout inaccessible to relevance stage")
+          print("pilot questions:", len(discovery_lines))
+          print("raw frozen evidence items:", content["frozen_items"])
+          PY
+
+      - name: Apply preregistered structural relevance v2
+        run: |
+          prediction-lab-filter-evidence \
+            benchmark/development.csv \
+            discovery-pilot/discovery.jsonl \
+            frozen-evidence/evidence-fixture.json \
+            filtered-evidence \
+            --max-items-per-question 5 \
+            --lead-words 40 \
+            --intent-window-words 50 \
+            --min-body-subject-mentions 2
+          printf '%s\n' "$GITHUB_SHA" > filtered-evidence/code-commit.txt
+          printf '%s\n' '651a65d00db80ea194e4a95d314bb6ebd03a29f5' > filtered-evidence/preregistration-commit.txt
+
+      - name: Verify and freeze filtered fixture
+        run: |
+          cat filtered-evidence/relevance-summary.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from prediction_lab.evidence import FileEvidenceProvider
+
+          summary = json.loads(
+              Path("filtered-evidence/relevance-summary.json").read_text(encoding="utf-8")
+          )
+          fixture = json.loads(
+              Path("filtered-evidence/evidence-fixture.filtered.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          FileEvidenceProvider("filtered-evidence/evidence-fixture.filtered.json")
+
+          expected = {
+              "method_version": "lexical-relevance-v2",
+              "pilot_questions": 20,
+              "raw_items": 94,
+              "max_items_per_question": 5,
+              "lead_words": 40,
+              "intent_window_words": 50,
+              "min_body_subject_mentions": 2,
+          }
+          for key, value in expected.items():
+              if summary.get(key) != value:
+                  raise SystemExit(
+                      f"unexpected v2 summary value for {key}: {summary.get(key)!r}"
+                  )
+          if len(fixture.get("questions", {})) != 20:
+              raise SystemExit("filtered fixture does not contain exactly 20 explicit questions")
+          if not 0 <= int(summary.get("kept_items", -1)) <= 94:
+              raise SystemExit("filtered evidence count is impossible")
+          if (
+              int(summary["questions_with_kept"])
+              + int(summary["questions_without_kept"])
+              != 20
+          ):
+              raise SystemExit("question coverage summary is inconsistent")
+
+          print("filtered fixture hash:", summary["filtered_fixture_hash"])
+          print("questions with relevant evidence:", summary["questions_with_kept"])
+          print("questions without relevant evidence:", summary["questions_without_kept"])
+          print("kept evidence items:", summary["kept_items"])
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload relevance-filtered evidence artifact v0.2
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-relevance-filter-v0.2
+          path: filtered-evidence/
+          if-no-files-found: error
+          retention-days: 30
