@@ -32,6 +32,7 @@ FILTERED_FIXTURE_SHA256 = "6c5d203feb47b13f15cfe46bbf58d327629544bd9aba61bfed140
 PROVENANCE_PATH = Path("docs/models/meta-llama-3.1-8b-instruct-provenance.json")
 DEFAULT_MODEL = "llama3.1:8b"
 _DIGEST_RE = re.compile(r"^(?:sha256:)?([0-9a-f]{64})$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -46,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ollama-model", default=DEFAULT_MODEL)
     parser.add_argument("--ollama-base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--ollama-timeout-seconds", type=float, default=240.0)
+    parser.add_argument(
+        "--evidence-spec",
+        type=Path,
+        help=(
+            "Optional checked-in JSON lineage spec for an alternate frozen development "
+            "evidence artifact. When omitted, the original relevance-v1 artifact is used."
+        ),
+    )
     parser.add_argument(
         "--refresh-model",
         action="store_true",
@@ -97,7 +106,7 @@ def _assert_clean_research_checkout(repository_root: Path) -> tuple[str, str]:
             "Local development run requires a clean worktree so code provenance is exact"
         )
     head = _capture(git, ["rev-parse", "HEAD"], cwd=repository_root)
-    if not re.fullmatch(r"[0-9a-f]{40}", head):
+    if not _COMMIT_RE.fullmatch(head):
         raise ResearchContractError(f"Unexpected Git HEAD: {head!r}")
     return git, head
 
@@ -182,7 +191,72 @@ def _ensure_model(
     return digest
 
 
-def _download_frozen_inputs(*, repository_root: Path, run_root: Path) -> tuple[Path, Path]:
+def _load_json(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ResearchContractError(f"Cannot read JSON {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ResearchContractError(f"Expected JSON object in {path}")
+    return value
+
+
+def _default_evidence_spec() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "workflow_run": EVIDENCE_RUN_ID,
+        "artifact": EVIDENCE_ARTIFACT,
+        "artifact_digest": EVIDENCE_ARTIFACT_DIGEST,
+        "filtered_fixture_sha256": FILTERED_FIXTURE_SHA256,
+        "expected_summary": {
+            "method_version": "lexical-relevance-v1",
+            "pilot_questions": 20,
+            "raw_items": 94,
+            "kept_items": 16,
+            "questions_with_kept": 8,
+            "questions_without_kept": 12,
+        },
+    }
+
+
+def _load_evidence_spec(repository_root: Path, spec_path: Path | None) -> dict[str, object]:
+    if spec_path is None:
+        spec = _default_evidence_spec()
+    else:
+        resolved = spec_path if spec_path.is_absolute() else repository_root / spec_path
+        spec = _load_json(resolved)
+
+    if spec.get("schema_version") != 1:
+        raise ResearchContractError("Evidence lineage spec must use schema_version 1")
+    workflow_run = spec.get("workflow_run")
+    if not isinstance(workflow_run, int) or workflow_run < 1:
+        raise ResearchContractError("Evidence lineage spec workflow_run must be a positive integer")
+    artifact = spec.get("artifact")
+    if not isinstance(artifact, str) or not artifact.strip():
+        raise ResearchContractError("Evidence lineage spec artifact must be a non-empty string")
+    artifact_digest = spec.get("artifact_digest")
+    if _DIGEST_RE.fullmatch(str(artifact_digest).strip()) is None:
+        raise ResearchContractError("Evidence lineage spec artifact_digest is invalid")
+    fixture_hash = spec.get("filtered_fixture_sha256")
+    if _DIGEST_RE.fullmatch(str(fixture_hash).strip()) is None:
+        raise ResearchContractError("Evidence lineage spec filtered_fixture_sha256 is invalid")
+    expected_summary = spec.get("expected_summary")
+    if not isinstance(expected_summary, dict) or not expected_summary:
+        raise ResearchContractError("Evidence lineage spec expected_summary must be a non-empty object")
+
+    for key in ("artifact_code_commit", "preregistration_commit"):
+        value = spec.get(key)
+        if value is not None and not _COMMIT_RE.fullmatch(str(value)):
+            raise ResearchContractError(f"Evidence lineage spec {key} is not a Git commit SHA")
+    return spec
+
+
+def _download_frozen_inputs(
+    *,
+    repository_root: Path,
+    run_root: Path,
+    evidence_spec: dict[str, object],
+) -> tuple[Path, Path]:
     gh = _which("gh")
     inputs = run_root / "inputs"
     pilot_dir = inputs / "development-pilot"
@@ -209,11 +283,11 @@ def _download_frozen_inputs(*, repository_root: Path, run_root: Path) -> tuple[P
         [
             "run",
             "download",
-            str(EVIDENCE_RUN_ID),
+            str(evidence_spec["workflow_run"]),
             "-R",
             REPOSITORY,
             "-n",
-            EVIDENCE_ARTIFACT,
+            str(evidence_spec["artifact"]),
             "-D",
             str(evidence_dir),
         ],
@@ -222,17 +296,11 @@ def _download_frozen_inputs(*, repository_root: Path, run_root: Path) -> tuple[P
     return pilot_dir, evidence_dir
 
 
-def _load_json(path: Path) -> dict[str, object]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ResearchContractError(f"Cannot read JSON {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise ResearchContractError(f"Expected JSON object in {path}")
-    return value
-
-
-def _validate_frozen_inputs(pilot_dir: Path, evidence_dir: Path) -> tuple[Path, Path, Path]:
+def _validate_frozen_inputs(
+    pilot_dir: Path,
+    evidence_dir: Path,
+    evidence_spec: dict[str, object],
+) -> tuple[Path, Path, Path]:
     forbidden = [
         path
         for directory in (pilot_dir, evidence_dir)
@@ -258,20 +326,33 @@ def _validate_frozen_inputs(pilot_dir: Path, evidence_dir: Path) -> tuple[Path, 
         raise ResearchContractError("Development pilot contains a non-development row")
 
     relevance = _load_json(relevance_summary)
-    if relevance.get("filtered_fixture_hash") != FILTERED_FIXTURE_SHA256:
+    expected_fixture_hash = str(evidence_spec["filtered_fixture_sha256"])
+    if relevance.get("filtered_fixture_hash") != expected_fixture_hash:
         raise ResearchContractError("Frozen filtered-evidence fixture identity changed")
-    expected_relevance = {
-        "method_version": "lexical-relevance-v1",
-        "pilot_questions": 20,
-        "raw_items": 94,
-        "kept_items": 16,
-        "questions_with_kept": 8,
-        "questions_without_kept": 12,
-    }
+    expected_relevance = evidence_spec["expected_summary"]
+    if not isinstance(expected_relevance, dict):
+        raise ResearchContractError("Evidence lineage expected_summary is invalid")
     for key, expected in expected_relevance.items():
         if relevance.get(key) != expected:
             raise ResearchContractError(
                 f"Frozen relevance summary changed for {key}: {relevance.get(key)!r}"
+            )
+
+    marker_expectations = {
+        "code-commit.txt": evidence_spec.get("artifact_code_commit"),
+        "preregistration-commit.txt": evidence_spec.get("preregistration_commit"),
+    }
+    for filename, expected in marker_expectations.items():
+        if expected is None:
+            continue
+        marker = evidence_dir / filename
+        try:
+            actual = marker.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ResearchContractError(f"Missing frozen evidence marker {filename}") from exc
+        if actual != expected:
+            raise ResearchContractError(
+                f"Frozen evidence marker {filename} changed: {actual!r}"
             )
 
     fixture = _load_json(evidence_fixture)
@@ -330,6 +411,7 @@ def run_local_development(args: argparse.Namespace) -> Path:
     repository_root = args.repository_root.resolve()
     _assert_loopback_ollama(args.ollama_base_url)
     _, code_commit = _assert_clean_research_checkout(repository_root)
+    evidence_spec = _load_evidence_spec(repository_root, args.evidence_spec)
 
     default_work_root = repository_root.parent / "trading-llm-local-runs"
     requested_work_root = args.work_root or default_work_root
@@ -342,10 +424,12 @@ def run_local_development(args: argparse.Namespace) -> Path:
     pilot_dir, evidence_dir = _download_frozen_inputs(
         repository_root=repository_root,
         run_root=run_root,
+        evidence_spec=evidence_spec,
     )
     pilot_csv, pilot_manifest, evidence_fixture = _validate_frozen_inputs(
         pilot_dir,
         evidence_dir,
+        evidence_spec,
     )
 
     immutable_digest = _ensure_model(
@@ -425,10 +509,13 @@ def run_local_development(args: argparse.Namespace) -> Path:
                 "dataset_sha256": PILOT_DATASET_SHA256,
             },
             "filtered_evidence": {
-                "workflow_run": EVIDENCE_RUN_ID,
-                "artifact": EVIDENCE_ARTIFACT,
-                "artifact_digest": EVIDENCE_ARTIFACT_DIGEST,
-                "filtered_fixture_sha256": FILTERED_FIXTURE_SHA256,
+                "workflow_run": evidence_spec["workflow_run"],
+                "artifact": evidence_spec["artifact"],
+                "artifact_digest": evidence_spec["artifact_digest"],
+                "filtered_fixture_sha256": evidence_spec["filtered_fixture_sha256"],
+                "expected_summary": evidence_spec["expected_summary"],
+                "artifact_code_commit": evidence_spec.get("artifact_code_commit"),
+                "preregistration_commit": evidence_spec.get("preregistration_commit"),
             },
         },
         "modes": outputs,
