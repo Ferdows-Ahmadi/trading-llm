@@ -23,11 +23,12 @@ PAGE_SIZE = 100
 MAX_PAGES = 100
 TARGET_COHORT = 100
 ADEQUACY_FLOOR = 60
-MIN_HORIZON = pd.Timedelta(days=7)
-MAX_HORIZON = pd.Timedelta(days=45)
+MIN_HORIZON = pd.Timedelta("7D")
+MAX_HORIZON = pd.Timedelta("45D")
 MIN_VOLUME = 5000.0
 MIN_LIQUIDITY = 1000.0
 MAX_SPREAD = 0.10
+_SPREAD_EPSILON = 1e-12
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -501,7 +502,7 @@ def collect_prospective_custody(
                 reasons.append("midpoint_outside_bid_ask")
             if spread < 0:
                 reasons.append("negative_spread")
-            elif spread > MAX_SPREAD:
+            elif spread - MAX_SPREAD > _SPREAD_EPSILON:
                 reasons.append("spread_above_maximum")
         if reasons:
             ledger_entry["clob_status"] = "rejected"
