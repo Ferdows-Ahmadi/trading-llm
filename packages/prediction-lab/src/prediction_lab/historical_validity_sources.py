@@ -144,7 +144,13 @@ def _redact_locator(raw: dict[str, Any], *, market_id: str) -> dict[str, object]
         for item in raw_events:
             if not isinstance(item, dict):
                 continue
-            events.append({field: item.get(field) for field in _LOCATOR_EVENT_FIELDS if field in item})
+            events.append(
+                {
+                    field: item.get(field)
+                    for field in _LOCATOR_EVENT_FIELDS
+                    if field in item
+                }
+            )
     return {"market": market, "events": events}
 
 
@@ -208,7 +214,11 @@ class GammaLocatorClient:
                 raise HistoricalSourceError("Gamma fallback returned invalid JSON") from exc
             if not isinstance(payload, list):
                 raise HistoricalSourceError("Gamma fallback must return a list")
-            matches = [item for item in payload if isinstance(item, dict) and str(item.get("id")) == market_id]
+            matches = [
+                item
+                for item in payload
+                if isinstance(item, dict) and str(item.get("id")) == market_id
+            ]
             if len(matches) != 1:
                 raise HistoricalSourceError("Gamma fallback did not resolve exactly one market")
             return _redact_locator(matches[0], market_id=market_id)
@@ -305,7 +315,11 @@ class WaybackAuditCdxClient:
 
     def latest_capture_before(self, url: str, *, cutoff: object) -> AuditCapture | None:
         cutoff_at = pd.Timestamp(cutoff)
-        cutoff_at = cutoff_at.tz_localize("UTC") if cutoff_at.tzinfo is None else cutoff_at.tz_convert("UTC")
+        cutoff_at = (
+            cutoff_at.tz_localize("UTC")
+            if cutoff_at.tzinfo is None
+            else cutoff_at.tz_convert("UTC")
+        )
         params = [
             ("url", url),
             ("output", "json"),
@@ -337,7 +351,11 @@ class WaybackAuditCdxClient:
                 continue
             record = dict(zip(header, values, strict=True))
             try:
-                timestamp = pd.to_datetime(str(record["timestamp"]), format="%Y%m%d%H%M%S", utc=True)
+                timestamp = pd.to_datetime(
+                    str(record["timestamp"]),
+                    format="%Y%m%d%H%M%S",
+                    utc=True,
+                )
             except (KeyError, TypeError, ValueError):
                 continue
             original = str(record.get("original") or "")
@@ -395,7 +413,11 @@ def _historical_gamma_object(payload: object, market_id: str) -> dict[str, Any] 
     if isinstance(payload, dict) and str(payload.get("id") or "") == market_id:
         return payload
     if isinstance(payload, list):
-        matches = [item for item in payload if isinstance(item, dict) and str(item.get("id") or "") == market_id]
+        matches = [
+            item
+            for item in payload
+            if isinstance(item, dict) and str(item.get("id") or "") == market_id
+        ]
         if len(matches) == 1:
             return matches[0]
     return None
@@ -423,7 +445,9 @@ def _freeze_replay(
     diagnostic: dict[str, object] = {
         "raw_sha256": raw_sha,
         "raw_bytes": len(raw),
-        "benchmark_question_normalized_sha256": _sha256(benchmark_normalized.encode("utf-8")),
+        "benchmark_question_normalized_sha256": _sha256(
+            benchmark_normalized.encode("utf-8")
+        ),
     }
     if "json" in capture.mime:
         try:
@@ -437,7 +461,9 @@ def _freeze_replay(
             diagnostic["historical_question_sha256"] = (
                 _sha256(historical_question.encode("utf-8")) if historical_question else None
             )
-            diagnostic["benchmark_question_exact_match"] = historical_question == benchmark_normalized
+            diagnostic["benchmark_question_exact_match"] = (
+                historical_question == benchmark_normalized
+            )
             diagnostic["historical_description_sha256"] = _safe_text_hash(
                 historical.get("description") or historical.get("rules") or ""
             )
@@ -456,7 +482,9 @@ def _freeze_replay(
             text_path.write_text(text, encoding="utf-8")
         diagnostic["text_sha256"] = text_sha
         diagnostic["text_chars"] = len(text)
-        diagnostic["benchmark_question_exact_match"] = benchmark_normalized in normalize_contract_text(text)
+        diagnostic["benchmark_question_exact_match"] = (
+            benchmark_normalized in normalize_contract_text(text)
+        )
     return diagnostic
 
 
@@ -548,18 +576,26 @@ def discover_sources(
             lookup_rows.append(record)
 
     (output / "locators.jsonl").write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in locator_rows),
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in locator_rows
+        ),
         encoding="utf-8",
     )
     (output / "wayback-lookups.jsonl").write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in lookup_rows),
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in lookup_rows
+        ),
         encoding="utf-8",
     )
 
     successful_locators = sum(row["locator_status"] == "success" for row in locator_rows)
     captures = sum(row["lookup_status"] == "capture" for row in lookup_rows)
     replay_failures = sum(row["lookup_status"] == "replay_failure" for row in lookup_rows)
-    transport_failures = sum(row["lookup_status"] == "transport_failure" for row in lookup_rows)
+    transport_failures = sum(
+        row["lookup_status"] == "transport_failure" for row in lookup_rows
+    )
     exact_matches = sum(
         isinstance(row.get("replay"), dict)
         and row["replay"].get("benchmark_question_exact_match") is True
@@ -586,7 +622,9 @@ def discover_sources(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Freeze historical-validity source discovery")
+    parser = argparse.ArgumentParser(
+        description="Freeze historical-validity source discovery"
+    )
     parser.add_argument("candidates_csv", type=Path)
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--code-commit", required=True)
