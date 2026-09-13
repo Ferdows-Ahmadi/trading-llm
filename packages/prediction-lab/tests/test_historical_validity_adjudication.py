@@ -7,11 +7,11 @@ import pytest
 
 from prediction_lab.historical_validity_adjudication import (
     A_VERIFIED,
-    AuditError,
     CANDIDATE_SHA,
     PROTOCOL_COMMIT,
     SOURCE_DIGEST,
     SOURCE_ID,
+    AuditError,
     adjudicate_b,
     adjudicate_c,
     load_evidence,
