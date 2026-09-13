@@ -1,6 +1,6 @@
 name: Prospective Development Custody v0.1
 
-# Execute the preregistered keyset-pagination recovery; scientific rules are unchanged.
+# Execute the preregistered keyset recovery with its frozen safety-cap amendment.
 on:
   push:
     branches:
@@ -15,6 +15,7 @@ permissions:
 env:
   PROTOCOL_COMMIT: 1562a16f835f1b75f878341146fa7a867f2439e5
   PAGINATION_AMENDMENT_COMMIT: e1f2570c9f0f342d41426c411fc8c8bbeafd8bc1
+  KEYSET_SAFETY_CAP_AMENDMENT_COMMIT: 39c8d2b2486f4545624bb6bb88be364bd6d03225
 
 jobs:
   custody:
@@ -44,24 +45,34 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$PROTOCOL_COMMIT" "$GITHUB_SHA"
           git merge-base --is-ancestor "$PAGINATION_AMENDMENT_COMMIT" "$GITHUB_SHA"
+          git merge-base --is-ancestor "$KEYSET_SAFETY_CAP_AMENDMENT_COMMIT" "$GITHUB_SHA"
           python - <<'PY'
           import os
           from prediction_lab import prospective_polymarket_custody_keyset as keyset
+          from prediction_lab import prospective_polymarket_custody_keyset_v2 as keyset_v2
 
           assert keyset.PAGINATION_AMENDMENT_COMMIT == os.environ["PAGINATION_AMENDMENT_COMMIT"]
+          assert (
+              keyset_v2.KEYSET_SAFETY_CAP_AMENDMENT_COMMIT
+              == os.environ["KEYSET_SAFETY_CAP_AMENDMENT_COMMIT"]
+          )
+          assert keyset_v2.KEYSET_MAX_PAGES == 1000
           PY
           pytest -q \
             packages/prediction-lab/tests/test_prospective_polymarket_custody.py \
-            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset_v2.py
           ruff check \
             packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody.py \
             packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody_keyset.py \
+            packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody_keyset_v2.py \
             packages/prediction-lab/tests/test_prospective_polymarket_custody.py \
-            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset_v2.py
 
       - name: Acquire and freeze one-time prospective market custody
         run: |
-          python -m prediction_lab.prospective_polymarket_custody_keyset \
+          python -m prediction_lab.prospective_polymarket_custody_keyset_v2 \
             "$RUNNER_TEMP/prospective-development-custody-v0.1" \
             --code-commit "$GITHUB_SHA"
 
@@ -86,7 +97,12 @@ jobs:
           ]
           assert summary["protocol_commit"] == os.environ["PROTOCOL_COMMIT"]
           assert summary["pagination_amendment_commit"] == os.environ["PAGINATION_AMENDMENT_COMMIT"]
+          assert (
+              summary["keyset_safety_cap_amendment_commit"]
+              == os.environ["KEYSET_SAFETY_CAP_AMENDMENT_COMMIT"]
+          )
           assert summary["pagination_mode"] == "gamma-markets-keyset-after_cursor"
+          assert summary["keyset_max_pages"] == 1000
           assert summary["code_commit"] == os.environ["GITHUB_SHA"]
           assert summary["selected_rows"] == len(rows)
           assert summary["selected_event_groups"] == len({row["event_id"] for row in rows})
@@ -103,6 +119,8 @@ jobs:
               "adequate_for_forecaster_preregistration:",
               summary["custody_adequate_for_forecaster_preregistration"],
           )
+          print("gamma_pages:", summary["gamma_pages"])
+          print("universe_rows:", summary["universe_rows"])
           print("cohort_sha256:", summary["cohort_sha256"])
           print("universe_sha256:", summary["universe_sha256"])
           PY
