@@ -82,7 +82,7 @@ jobs:
           assert len(ledger) == summary["universe_rows"]
           assert summary["forecaster_run"] is False
           assert summary["model_score_computed"] is False
-          assert summary["reserved_holdout_accessed"] is false
+          assert summary["reserved_holdout_accessed"] is False
           print("custody_rows:", summary["selected_rows"])
           print("custody_event_groups:", summary["selected_event_groups"])
           print(
