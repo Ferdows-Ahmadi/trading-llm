@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -71,13 +70,6 @@ def _load_json(path: Path) -> dict[str, object]:
     return value
 
 
-def _canonical_question_text(value: object) -> str:
-    """Normalize only Unicode and whitespace, matching the preregistered audit rule."""
-
-    text = unicodedata.normalize("NFC", str(value)).replace("\r\n", "\n").replace("\r", "\n")
-    return " ".join(text.split()).strip()
-
-
 def build_fresh_candidates(
     *,
     development_csv: Path,
@@ -125,7 +117,7 @@ def build_fresh_candidates(
     ].copy()
     safe["question_id"] = safe["question_id"].astype(str)
     safe["event_id"] = safe["event_id"].astype(str)
-    safe["question_text"] = safe["question_text"].map(_canonical_question_text)
+    safe["question_text"] = safe["question_text"].astype(str)
     safe["forecasted_at"] = pd.to_datetime(safe["forecasted_at"], utc=True, errors="raise")
     safe["source_cutoff_at"] = pd.to_datetime(
         safe["source_cutoff_at"], utc=True, errors="raise"
