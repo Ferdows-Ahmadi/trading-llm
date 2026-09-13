@@ -1,6 +1,6 @@
 name: Prospective Development Custody v0.1
 
-# Pre-live retry 2 after import-order lint fix; scientific rules are unchanged.
+# Post-keyset-recovery execution trigger; scientific rules are unchanged.
 on:
   push:
     branches:
@@ -82,7 +82,7 @@ jobs:
           assert len(ledger) == summary["universe_rows"]
           assert summary["forecaster_run"] is False
           assert summary["model_score_computed"] is False
-          assert summary["reserved_holdout_accessed"] is False
+          assert summary["reserved_holdout_accessed"] is false
           print("custody_rows:", summary["selected_rows"])
           print("custody_event_groups:", summary["selected_event_groups"])
           print(
