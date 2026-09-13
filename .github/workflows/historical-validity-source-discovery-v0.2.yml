@@ -1,0 +1,179 @@
+name: Historical Validity Source Discovery v0.2
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-validity-source-discovery-v0.2.yml
+      - docs/experiments/historical-validity-source-discovery-v2.md
+      - docs/experiments/historical-validity-source-discovery-v2-clarification.md
+      - packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2.py
+      - packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  discover-sources-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen v2 acquisition contract
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 97ac0e7ee15c0b315a6369a4a955f5f3b078ed57 "$GITHUB_SHA"
+          git merge-base --is-ancestor 063a86e3b457ef17e72db49b4467e49445933866 "$GITHUB_SHA"
+          git merge-base --is-ancestor 889291aa5798e9238702884e8daf012d60991291 "$GITHUB_SHA"
+          git merge-base --is-ancestor 04a038c2c0bf6c0dcf1ad837b1abb78e7fe3ffac "$GITHUB_SHA"
+          pytest -q packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2.py \
+            packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+          gh auth status
+
+      - name: Download exact frozen candidates and v1 locators
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=root / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34739814494,
+              name="historical-validity-source-discovery-v0.1",
+              digest="sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622",
+              destination=root / "source-v1",
+              allowed_files=frozenset(
+                  {
+                      "code-commit.txt",
+                      "locators.jsonl",
+                      "parent-preregistration-commit.txt",
+                      "source-discovery-clarification-commit.txt",
+                      "source-discovery-protocol-commit.txt",
+                      "source-discovery-summary.json",
+                      "wayback-lookups.jsonl",
+                  }
+              ),
+              code_commit="ef5d0c7159f662af1099e089349698310c931183",
+          )
+          PY
+
+      - name: Discover and freeze expanded historical source captures
+        run: |
+          mkdir -p "$RUNNER_TEMP/historical-validity-sources-v2"
+          python -m prediction_lab.historical_validity_sources_v2 \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/source-v1/locators.jsonl" \
+            "$RUNNER_TEMP/historical-validity-sources-v2" \
+            --code-commit "$GITHUB_SHA"
+          printf '%s\n' "$GITHUB_SHA" \
+            > "$RUNNER_TEMP/historical-validity-sources-v2/code-commit.txt"
+          printf '%s\n' 97ac0e7ee15c0b315a6369a4a955f5f3b078ed57 \
+            > "$RUNNER_TEMP/historical-validity-sources-v2/v2-protocol-commit.txt"
+          printf '%s\n' 063a86e3b457ef17e72db49b4467e49445933866 \
+            > "$RUNNER_TEMP/historical-validity-sources-v2/v2-clarification-commit.txt"
+          printf '%s\n' sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622 \
+            > "$RUNNER_TEMP/historical-validity-sources-v2/v1-artifact-digest.txt"
+
+      - name: Require complete v2 candidate and provider accounting
+        run: |
+          python - "$RUNNER_TEMP/historical-validity-sources-v2" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          summary = json.loads((root / "source-discovery-v2-summary.json").read_text())
+          if summary.get("candidate_rows") != 64:
+              raise SystemExit("v2 did not account for all 64 candidates")
+          if summary.get("candidate_sha256") != (
+              "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
+          ):
+              raise SystemExit("v2 candidate identity changed")
+          if summary.get("v1_artifact_digest") != (
+              "sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622"
+          ):
+              raise SystemExit("v2 V1 locator identity changed")
+          if summary.get("code_commit") != (root / "code-commit.txt").read_text().strip():
+              raise SystemExit("v2 code commit mismatch")
+          if summary.get("commoncrawl_max_collections") != 6:
+              raise SystemExit("Common Crawl acquisition bound changed")
+          if not summary.get("commoncrawl_collections_sha256"):
+              raise SystemExit("Common Crawl collection manifest was not frozen")
+
+          rows = [
+              json.loads(line)
+              for line in (root / "source-lookups-v2.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          known = {str(row.get("question_id")) for row in rows}
+          if len(known) != 64:
+              raise SystemExit("v2 lookup ledger does not cover all candidates")
+          allowed_statuses = {
+              "capture",
+              "no_capture",
+              "transport_failure",
+              "content_failure",
+              "no_url",
+          }
+          if any(row.get("lookup_status") not in allowed_statuses for row in rows):
+              raise SystemExit("v2 ledger contains an unknown status")
+          providers = {row.get("provider") for row in rows if row.get("provider") is not None}
+          if not providers.issubset({"wayback", "common-crawl"}):
+              raise SystemExit("v2 ledger contains an unregistered provider")
+
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload frozen source-discovery v2 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2
+          path: ${{ runner.temp }}/historical-validity-sources-v2/
+          if-no-files-found: warn
+          retention-days: 90
