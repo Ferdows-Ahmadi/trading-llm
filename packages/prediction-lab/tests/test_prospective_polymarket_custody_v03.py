@@ -26,7 +26,12 @@ def test_v03_takes_at_most_two_deterministic_candidates_per_event() -> None:
     assert len(candidates) == 3
     assert sum(row["event_id"] == "event-a" for row in candidates) == 2
     assert sum(row["event_id"] == "event-b" for row in candidates) == 1
-    assert {row["within_event_rank"] for row in candidates if row["event_id"] == "event-a"} == {1, 2}
+    event_a_ranks = {
+        row["within_event_rank"]
+        for row in candidates
+        if row["event_id"] == "event-a"
+    }
+    assert event_a_ranks == {1, 2}
 
     expected_a = sorted(
         [row for row in eligible if row["event_id"] == "event-a"],
