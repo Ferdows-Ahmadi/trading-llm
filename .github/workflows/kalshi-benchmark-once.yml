@@ -1,0 +1,124 @@
+name: First Kalshi Benchmark
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/kalshi-benchmark-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Diagnose deeper historical pages
+        run: |
+          python - <<'PY'
+          import httpx
+          import pandas as pd
+
+          base = "https://external-api.kalshi.com/trade-api/v2"
+          cursor = None
+          total_long = 0
+          with httpx.Client(timeout=30.0) as client:
+              for page_number in range(1, 11):
+                  params = {"limit": 1000, "mve_filter": "exclude"}
+                  if cursor:
+                      params["cursor"] = cursor
+                  payload = client.get(f"{base}/historical/markets", params=params).json()
+                  markets = payload.get("markets", [])
+                  long_markets = []
+                  durations = []
+                  for market in markets:
+                      if not market.get("open_time") or not market.get("close_time"):
+                          continue
+                      duration = (
+                          pd.Timestamp(market["close_time"])
+                          - pd.Timestamp(market["open_time"])
+                      ).total_seconds() / 86400.0
+                      durations.append(duration)
+                      if duration >= 7:
+                          long_markets.append(market)
+                  total_long += len(long_markets)
+                  print(
+                      f"historical page {page_number}: raw={len(markets)} "
+                      f"long>=7d={len(long_markets)} "
+                      f"max_days={max(durations) if durations else None}"
+                  )
+                  cursor = payload.get("cursor") or None
+                  if not cursor:
+                      break
+              print("long-duration markets found in first pages:", total_long)
+          PY
+
+      - name: Fetch and freeze public Kalshi benchmark
+        run: |
+          prediction-lab-fetch-kalshi \
+            --max-questions 300 \
+            --candidate-multiplier 8 \
+            --minimum-lead 7D \
+            --minimum-volume 100 \
+            --holdout-fraction 0.25 \
+            --max-market-pages 30 \
+            --max-trade-pages 3 \
+            --output-dir data/prediction-lab/kalshi-public-v0.1
+
+      - name: Evaluate deterministic baselines
+        run: |
+          prediction-lab-baselines \
+            data/prediction-lab/kalshi-public-v0.1/development.csv \
+            data/prediction-lab/kalshi-public-v0.1/development.manifest.json \
+            data/prediction-lab/kalshi-public-v0.1/holdout.csv \
+            data/prediction-lab/kalshi-public-v0.1/holdout.manifest.json \
+            --output data/prediction-lab/kalshi-public-v0.1/baselines.json
+
+      - name: Print benchmark result
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("data/prediction-lab/kalshi-public-v0.1")
+          summary = json.loads((root / "acquisition-summary.json").read_text())
+          baselines = json.loads((root / "baselines.json").read_text())
+          print("=== BENCHMARK SIZE ===")
+          print("development:", summary["development_rows"])
+          print("holdout:", summary["holdout_rows"])
+          print("holdout_start:", summary["holdout_start"])
+          print("=== HOLDOUT BASELINES ===")
+          for name, report in baselines["reports"].items():
+              print(
+                  name,
+                  "brier=", report["model_brier"],
+                  "market_brier=", report["market_brier"],
+                  "delta=", report["brier_delta"],
+                  "skill=", report["model_skill_vs_market"],
+              )
+          PY
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-public-benchmark-v0.1
+          path: data/prediction-lab/kalshi-public-v0.1/
+          if-no-files-found: error
+          retention-days: 14

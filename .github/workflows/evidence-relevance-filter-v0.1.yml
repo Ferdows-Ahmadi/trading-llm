@@ -1,0 +1,123 @@
+name: Evidence Relevance Filter v0.1 (legacy)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  filter-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout frozen v0.1 implementation
+        uses: actions/checkout@v4
+        with:
+          ref: 3eb00976a4043ed160fec17976cfaf2f156525ab
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen GDELT discovery pilot
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Download full frozen Wayback evidence corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: wayback-content-freeze-v0.2
+          path: frozen-evidence
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34527997994
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected_benchmark = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual_benchmark = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual_benchmark != expected_benchmark:
+              raise SystemExit(f"development benchmark hash mismatch: {actual_benchmark}")
+
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          if list(Path("benchmark").glob("holdout*")):
+              raise SystemExit("holdout files remain before relevance filtering")
+
+          discovery_lines = [
+              line
+              for line in Path("discovery-pilot/discovery.jsonl")
+              .read_text(encoding="utf-8")
+              .splitlines()
+              if line.strip()
+          ]
+          if len(discovery_lines) != 20:
+              raise SystemExit(f"expected 20 frozen pilot questions, got {len(discovery_lines)}")
+
+          content = json.loads(
+              Path("frozen-evidence/content-summary.json").read_text(encoding="utf-8")
+          )
+          expected_content = {
+              "selected_capture_items": 100,
+              "frozen_items": 94,
+              "content_failures": 6,
+              "questions_with_content": 12,
+          }
+          for key, value in expected_content.items():
+              if content.get(key) != value:
+                  raise SystemExit(
+                      f"frozen content summary changed for {key}: {content.get(key)!r}"
+                  )
+
+          print("development benchmark sha256:", actual_benchmark)
+          print("holdout files removed before relevance filtering")
+          print("pilot questions:", len(discovery_lines))
+          print("raw frozen evidence items:", content["frozen_items"])
+          PY
+
+      - name: Apply legacy relevance filter
+        run: |
+          prediction-lab-filter-evidence \
+            benchmark/development.csv \
+            discovery-pilot/discovery.jsonl \
+            frozen-evidence/evidence-fixture.json \
+            filtered-evidence \
+            --max-items-per-question 5 \
+            --context-chars 260
+
+      - name: Upload relevance-filtered evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-relevance-filter-v0.1-legacy-rerun
+          path: filtered-evidence/
+          if-no-files-found: error
+          retention-days: 14

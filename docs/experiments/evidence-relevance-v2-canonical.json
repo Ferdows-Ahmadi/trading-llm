@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "workflow_run": 34689232387,
+  "artifact": "evidence-relevance-filter-v0.2",
+  "artifact_digest": "sha256:1d0280f73d0a48f925dd4ef5f48ab6328a5f7d16ea295d4f78fadcd7e741c0e4",
+  "filtered_fixture_sha256": "cfafa8c780c7067c656a5c8474f172f46239f12e10f1632cd22256f2430a3035",
+  "artifact_code_commit": "700353ec323ab7a0274197ae8e3996761babf4ec",
+  "preregistration_commit": "651a65d00db80ea194e4a95d314bb6ebd03a29f5",
+  "expected_summary": {
+    "method_version": "lexical-relevance-v2",
+    "pilot_questions": 20,
+    "raw_items": 94,
+    "kept_items": 7,
+    "questions_with_kept": 4,
+    "questions_without_kept": 16,
+    "max_items_per_question": 5,
+    "lead_words": 40,
+    "intent_window_words": 50,
+    "min_body_subject_mentions": 2
+  }
+}

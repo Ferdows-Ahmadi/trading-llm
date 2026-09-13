@@ -1,0 +1,149 @@
+name: Wayback Content Freeze Pilot v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/wayback-content-freeze-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/wayback_content.py
+      - packages/prediction-lab/src/prediction_lab/wayback_content_cli.py
+      - packages/prediction-lab/tests/test_wayback_content.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  freeze-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen Wayback capture index
+        uses: actions/download-artifact@v4
+        with:
+          name: wayback-capture-index-v0.3
+          path: wayback-capture-index
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34526489458
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          if list(Path("benchmark").glob("holdout*")):
+              raise SystemExit("holdout files remain before archived-body retrieval")
+
+          summary = json.loads(
+              Path("wayback-capture-index/capture-summary.json").read_text(encoding="utf-8")
+          )
+          expected_capture = {
+              "urls_considered": 111,
+              "captures_found": 100,
+              "urls_without_capture": 10,
+              "lookup_failures": 1,
+              "questions_with_captures": 12,
+          }
+          for key, value in expected_capture.items():
+              if summary.get(key) != value:
+                  raise SystemExit(
+                      f"Wayback v0.3 capture summary changed for {key}: {summary.get(key)!r}"
+                  )
+
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before archived-body retrieval")
+          print("verified Wayback v0.3 captures:", summary["captures_found"])
+          PY
+
+      - name: Freeze one archived page per evidence-bearing question
+        run: |
+          timeout 15m prediction-lab-wayback-freeze-content \
+            wayback-capture-index/captures.jsonl \
+            frozen-evidence \
+            --max-items-per-question 1 \
+            --minimum-text-chars 200 \
+            --retries 3 \
+            --timeout-seconds 30 \
+            --retry-backoff-seconds 3 \
+            --minimum-interval-seconds 2
+
+      - name: Verify frozen evidence fixture
+        if: always()
+        run: |
+          if [ ! -f frozen-evidence/content-summary.json ]; then
+            echo "Content stage did not reach final summary. Preserving partial checkpoints."
+            find frozen-evidence/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
+            exit 0
+          fi
+
+          cat frozen-evidence/content-summary.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from prediction_lab.evidence import FileEvidenceProvider
+
+          summary = json.loads(
+              Path("frozen-evidence/content-summary.json").read_text(encoding="utf-8")
+          )
+          fixture = json.loads(
+              Path("frozen-evidence/evidence-fixture.json").read_text(encoding="utf-8")
+          )
+          FileEvidenceProvider("frozen-evidence/evidence-fixture.json")
+
+          questions = fixture.get("questions", {})
+          with_items = sum(bool(items) for items in questions.values())
+          if with_items != int(summary.get("questions_with_content", -1)):
+              raise SystemExit("evidence fixture question count disagrees with content summary")
+          if int(summary.get("frozen_items", 0)) > 12:
+              raise SystemExit("pilot froze more than one item per evidence-bearing question")
+
+          print("validated evidence fixture sha256:", summary["evidence_fixture_sha256"])
+          print("questions with frozen content:", with_items)
+          PY
+
+      - name: Upload content freeze pilot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayback-content-freeze-v0.1
+          path: frozen-evidence/
+          if-no-files-found: error
+          retention-days: 14

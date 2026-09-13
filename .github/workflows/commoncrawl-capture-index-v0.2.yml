@@ -1,0 +1,116 @@
+name: Common Crawl Capture Index Pilot v0.2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen v0.4 GDELT discovery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Seed v0.2 from the v0.1 capture checkpoints
+        uses: actions/download-artifact@v4
+        with:
+          name: commoncrawl-capture-index-v0.1
+          path: capture-index
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34510852562
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+
+          summary = json.loads(Path("discovery-pilot/discovery-summary.json").read_text())
+          if summary.get("pilot_questions") != 20:
+              raise SystemExit("unexpected discovery pilot size")
+          if int(summary.get("questions_with_results", 0)) < 12:
+              raise SystemExit("v0.4 discovery artifact did not pass the 12/20 gate")
+
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before capture lookup")
+          print("v0.4 questions with discovery:", summary["questions_with_results"])
+          PY
+
+      - name: Retry failed Common Crawl capture lookups with bounded pacing
+        run: |
+          timeout 25m prediction-lab-cc-capture-index \
+            benchmark/development.csv \
+            benchmark/development.manifest.json \
+            discovery-pilot/discovery.jsonl \
+            capture-index \
+            --pilot-size 20 \
+            --max-urls-per-question 1 \
+            --max-collections 2 \
+            --retries 3 \
+            --timeout-seconds 12 \
+            --retry-backoff-seconds 2 \
+            --minimum-interval-seconds 2
+
+      - name: Print capture-index audit
+        if: always()
+        run: |
+          if [ -f capture-index/capture-summary.json ]; then
+            cat capture-index/capture-summary.json
+            echo "--- capture index audit ---"
+            cat capture-index/capture-audit.csv
+          else
+            echo "Capture stage did not reach final summary. Preserving partial checkpoints."
+            find capture-index/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
+          fi
+
+      - name: Upload v0.2 capture-index artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: commoncrawl-capture-index-v0.2
+          path: capture-index/
+          if-no-files-found: error
+          retention-days: 14
