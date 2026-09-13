@@ -8,8 +8,11 @@ on:
       - .github/workflows/historical-validity-source-discovery-v0.2.yml
       - docs/experiments/historical-validity-source-discovery-v2.md
       - docs/experiments/historical-validity-source-discovery-v2-clarification.md
+      - docs/experiments/historical-validity-source-discovery-v2-execution-sharding.md
       - packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2.py
+      - packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2_sharded.py
       - packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+      - packages/prediction-lab/tests/test_historical_validity_sources_v2_sharded.py
   workflow_dispatch:
 
 permissions:
@@ -20,9 +23,9 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  discover-sources-v2:
+  verify-v2-execution-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 20
 
     steps:
       - name: Checkout exact research commit
@@ -40,20 +43,51 @@ jobs:
       - name: Install prediction lab
         run: python -m pip install -e "./packages/prediction-lab[dev]"
 
-      - name: Verify frozen v2 acquisition contract
+      - name: Verify frozen v2 acquisition and execution contract
         run: |
           test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
           test -z "$(git status --porcelain)"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor 97ac0e7ee15c0b315a6369a4a955f5f3b078ed57 "$GITHUB_SHA"
           git merge-base --is-ancestor 063a86e3b457ef17e72db49b4467e49445933866 "$GITHUB_SHA"
-          git merge-base --is-ancestor 889291aa5798e9238702884e8daf012d60991291 "$GITHUB_SHA"
-          git merge-base --is-ancestor 04a038c2c0bf6c0dcf1ad837b1abb78e7fe3ffac "$GITHUB_SHA"
-          pytest -q packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+          git merge-base --is-ancestor 690d4a5e22948eff0dfcc74c9c07645018dc11a8 "$GITHUB_SHA"
+          git merge-base --is-ancestor e5252495e020c48e330119bc7bce6163743ad74e "$GITHUB_SHA"
+          git merge-base --is-ancestor f379c20ed1570669c04714b312bddbb69680c3cc "$GITHUB_SHA"
+          pytest -q \
+            packages/prediction-lab/tests/test_historical_validity_sources_v2.py \
+            packages/prediction-lab/tests/test_historical_validity_sources_v2_sharded.py
           ruff check \
             packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2.py \
-            packages/prediction-lab/tests/test_historical_validity_sources_v2.py
+            packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2_sharded.py \
+            packages/prediction-lab/tests/test_historical_validity_sources_v2.py \
+            packages/prediction-lab/tests/test_historical_validity_sources_v2_sharded.py
           gh auth status
+
+  discover-sources-v2-shards:
+    needs: verify-v2-execution-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
 
       - name: Download exact frozen candidates and v1 locators
         run: |
@@ -101,12 +135,110 @@ jobs:
           )
           PY
 
-      - name: Discover and freeze expanded historical source captures
+      - name: Discover frozen historical sources for shard ${{ matrix.shard }}
         run: |
-          mkdir -p "$RUNNER_TEMP/historical-validity-sources-v2"
-          python -m prediction_lab.historical_validity_sources_v2 \
+          python -m prediction_lab.historical_validity_sources_v2_sharded shard \
             "$RUNNER_TEMP/candidates/candidates.csv" \
             "$RUNNER_TEMP/source-v1/locators.jsonl" \
+            "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-shard-${{ matrix.shard }}" \
+            --shard-index "${{ matrix.shard }}" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Verify shard accounting
+        run: |
+          python - "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-shard-${{ matrix.shard }}" "${{ matrix.shard }}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          shard_index = int(sys.argv[2])
+          summary = json.loads((root / "source-discovery-v2-summary.json").read_text())
+          metadata = json.loads((root / "shard-metadata.json").read_text())
+          if summary.get("parent_candidate_sha256") != (
+              "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
+          ):
+              raise SystemExit("shard parent candidate identity changed")
+          if summary.get("shard_count") != 4 or summary.get("shard_index") != shard_index:
+              raise SystemExit("shard execution geometry changed")
+          if summary.get("candidate_rows") != 16 or metadata.get("shard_size") != 16:
+              raise SystemExit("shard candidate count changed")
+          if len(metadata.get("question_ids", [])) != 16:
+              raise SystemExit("shard question membership is incomplete")
+          if summary.get("commoncrawl_max_collections") != 6:
+              raise SystemExit("Common Crawl acquisition bound changed")
+          if not summary.get("commoncrawl_collections_sha256"):
+              raise SystemExit("Common Crawl collection manifest was not frozen")
+          PY
+
+      - name: Upload frozen shard ${{ matrix.shard }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/historical-validity-source-discovery-v0.2-shard-${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 90
+
+  merge-sources-v2:
+    needs: discover-sources-v2-shards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download exact frozen parent candidates
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=Path(os.environ["RUNNER_TEMP"]) / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          PY
+
+      - name: Download all successful shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: historical-validity-source-discovery-v0.2-shard-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Deterministically merge the four shards
+        run: |
+          python -m prediction_lab.historical_validity_sources_v2_sharded merge \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/shards" \
             "$RUNNER_TEMP/historical-validity-sources-v2" \
             --code-commit "$GITHUB_SHA"
           printf '%s\n' "$GITHUB_SHA" \
@@ -115,10 +247,12 @@ jobs:
             > "$RUNNER_TEMP/historical-validity-sources-v2/v2-protocol-commit.txt"
           printf '%s\n' 063a86e3b457ef17e72db49b4467e49445933866 \
             > "$RUNNER_TEMP/historical-validity-sources-v2/v2-clarification-commit.txt"
+          printf '%s\n' 690d4a5e22948eff0dfcc74c9c07645018dc11a8 \
+            > "$RUNNER_TEMP/historical-validity-sources-v2/v2-execution-sharding-commit.txt"
           printf '%s\n' sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622 \
             > "$RUNNER_TEMP/historical-validity-sources-v2/v1-artifact-digest.txt"
 
-      - name: Require complete v2 candidate and provider accounting
+      - name: Require complete merged v2 accounting
         run: |
           python - "$RUNNER_TEMP/historical-validity-sources-v2" <<'PY'
           import json
@@ -128,17 +262,21 @@ jobs:
           root = Path(sys.argv[1])
           summary = json.loads((root / "source-discovery-v2-summary.json").read_text())
           if summary.get("candidate_rows") != 64:
-              raise SystemExit("v2 did not account for all 64 candidates")
+              raise SystemExit("merged v2 did not account for all 64 candidates")
           if summary.get("candidate_sha256") != (
               "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
           ):
-              raise SystemExit("v2 candidate identity changed")
+              raise SystemExit("merged v2 candidate identity changed")
           if summary.get("v1_artifact_digest") != (
               "sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622"
           ):
-              raise SystemExit("v2 V1 locator identity changed")
+              raise SystemExit("merged v2 V1 locator identity changed")
+          if summary.get("execution_mode") != "deterministic-contiguous-shards-merged":
+              raise SystemExit("merged v2 execution mode changed")
+          if summary.get("shard_count") != 4:
+              raise SystemExit("merged v2 shard count changed")
           if summary.get("code_commit") != (root / "code-commit.txt").read_text().strip():
-              raise SystemExit("v2 code commit mismatch")
+              raise SystemExit("merged v2 code commit mismatch")
           if summary.get("commoncrawl_max_collections") != 6:
               raise SystemExit("Common Crawl acquisition bound changed")
           if not summary.get("commoncrawl_collections_sha256"):
@@ -151,7 +289,7 @@ jobs:
           ]
           known = {str(row.get("question_id")) for row in rows}
           if len(known) != 64:
-              raise SystemExit("v2 lookup ledger does not cover all candidates")
+              raise SystemExit("merged v2 lookup ledger does not cover all candidates")
           allowed_statuses = {
               "capture",
               "no_capture",
@@ -160,16 +298,16 @@ jobs:
               "no_url",
           }
           if any(row.get("lookup_status") not in allowed_statuses for row in rows):
-              raise SystemExit("v2 ledger contains an unknown status")
+              raise SystemExit("merged v2 ledger contains an unknown status")
           providers = {row.get("provider") for row in rows if row.get("provider") is not None}
           if not providers.issubset({"wayback", "common-crawl"}):
-              raise SystemExit("v2 ledger contains an unregistered provider")
+              raise SystemExit("merged v2 ledger contains an unregistered provider")
 
           print(json.dumps(summary, indent=2, sort_keys=True))
           PY
           test -z "$(git status --porcelain)"
 
-      - name: Upload frozen source-discovery v2 artifact
+      - name: Upload canonical frozen source-discovery v2 artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
