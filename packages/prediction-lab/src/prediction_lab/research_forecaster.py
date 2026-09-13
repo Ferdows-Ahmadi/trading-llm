@@ -18,6 +18,10 @@ from prediction_lab.research_types import (
     content_hash,
     format_utc,
 )
+from prediction_lab.residual_v2 import (
+    PROMPT_VERSION as RESIDUAL_V2,
+)
+from prediction_lab.residual_v2 import OllamaMarketResidualV2Adapter, residual_instructions
 
 PROMPT_STAGES = (
     "base-rate estimate",
@@ -170,6 +174,10 @@ def build_model_request(
     }
     if mode == "market-aware":
         request["market_probability"] = market_probability
+    if prompt_version == RESIDUAL_V2:
+        if mode != "market-aware":
+            raise ResearchContractError("Residual-v2 requires market-aware mode")
+        request["instructions"] = residual_instructions()
     return request
 
 
@@ -192,6 +200,15 @@ def forecast_question(
 
     if evidence_packet.question_id != question_id:
         raise ResearchContractError("Evidence packet question_id mismatch")
+    if evidence_packet.availability is not None:
+        evidence_packet.availability.assert_usable()
+    if prompt_version == RESIDUAL_V2:
+        if not isinstance(adapter, OllamaMarketResidualV2Adapter):
+            raise ResearchContractError("Residual-v2 requires its explicitly versioned adapter")
+        if evidence_packet.availability is None:
+            raise ResearchContractError("Residual-v2 requires explicit verified evidence state")
+    elif isinstance(adapter, OllamaMarketResidualV2Adapter):
+        raise ResearchContractError("Residual-v2 adapter cannot run under a legacy prompt identity")
     adapter.metadata.assert_safe_for_historical_scoring(evidence_packet.forecasted_at)
     request = build_model_request(
         question_id=question_id,
@@ -217,7 +234,8 @@ def forecast_question(
     )
     if cached is not None:
         if (
-            cached.experiment_id != experiment_id
+            cached.benchmark_hash != benchmark_hash
+            or cached.experiment_id != experiment_id
             or cached.code_commit != code_commit
             or cached.experiment_config_hash != experiment_config_hash
             or cached.question_id != question_id
@@ -248,6 +266,11 @@ def forecast_question(
         evidence_packet_hash=evidence_packet.packet_hash,
         raw_structured_model_output=raw,
         cache_key=key,
+        residual_decision=(
+            adapter.decision_records()[question_id]
+            if isinstance(adapter, OllamaMarketResidualV2Adapter)
+            else None
+        ),
     )
     cache.store(artifact)
     return artifact, False

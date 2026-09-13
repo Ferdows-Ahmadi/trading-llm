@@ -6,7 +6,12 @@ import re
 import unicodedata
 from pathlib import Path
 
-from prediction_lab.research_types import EvidenceItem, ResearchContractError, content_hash
+from prediction_lab.research_types import (
+    EvidenceAvailability,
+    EvidenceItem,
+    ResearchContractError,
+    content_hash,
+)
 
 METHOD_VERSION = "lexical-relevance-v2"
 DEFAULT_LEAD_WORDS = 40
@@ -121,9 +126,7 @@ def _subsequence_starts(tokens: tuple[str, ...], needle: tuple[str, ...]) -> tup
         return ()
     width = len(needle)
     return tuple(
-        index
-        for index in range(len(tokens) - width + 1)
-        if tokens[index : index + width] == needle
+        index for index in range(len(tokens) - width + 1) if tokens[index : index + width] == needle
     )
 
 
@@ -164,9 +167,7 @@ def _intent_signals_near_subject(
     if not subject_starts:
         return ()
 
-    signal_tokens = {
-        signal: _word_tokens(signal) for signal in _INTENT_SIGNALS[intent]
-    }
+    signal_tokens = {signal: _word_tokens(signal) for signal in _INTENT_SIGNALS[intent]}
     hits: set[str] = set()
     for start in subject_starts:
         left = max(0, start - intent_window_words)
@@ -264,18 +265,12 @@ def _read_pilot_ids(path: str | Path) -> tuple[str, ...]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ResearchContractError(
-                f"Malformed discovery JSONL at line {line_number}"
-            ) from exc
+            raise ResearchContractError(f"Malformed discovery JSONL at line {line_number}") from exc
         if not isinstance(record, dict):
-            raise ResearchContractError(
-                f"Discovery JSONL line {line_number} must be an object"
-            )
+            raise ResearchContractError(f"Discovery JSONL line {line_number} must be an object")
         question_id = str(record.get("question_id") or "").strip()
         if not question_id:
-            raise ResearchContractError(
-                f"Discovery JSONL line {line_number} has no question_id"
-            )
+            raise ResearchContractError(f"Discovery JSONL line {line_number} has no question_id")
         if question_id not in seen:
             seen.add(question_id)
             question_ids.append(question_id)
@@ -316,19 +311,24 @@ def filter_evidence_fixture(
         fixture_payload = json.loads(Path(evidence_fixture).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ResearchContractError(f"Cannot load evidence fixture: {exc}") from exc
-    if not isinstance(fixture_payload, dict) or fixture_payload.get("schema_version") != 1:
-        raise ResearchContractError("Evidence fixture must use schema_version 1")
+    if not isinstance(fixture_payload, dict) or fixture_payload.get("schema_version") not in (1, 2):
+        raise ResearchContractError("Evidence fixture must use schema_version 1 or 2")
     raw_questions = fixture_payload.get("questions")
     if not isinstance(raw_questions, dict):
         raise ResearchContractError("Evidence fixture questions must be an object")
+    raw_states = fixture_payload.get("availability")
+    if fixture_payload["schema_version"] == 2:
+        if not isinstance(raw_states, dict) or set(raw_states) != set(raw_questions):
+            raise ResearchContractError("Evidence availability must cover exactly all questions")
+    elif raw_states is not None:
+        raise ResearchContractError("Legacy evidence cannot silently acquire new state semantics")
 
     output = Path(output_directory)
     output.mkdir(parents=True, exist_ok=True)
-    filtered: dict[str, list[dict[str, object]]] = {
-        question_id: [] for question_id in pilot_ids
-    }
+    filtered: dict[str, list[dict[str, object]]] = {question_id: [] for question_id in pilot_ids}
     audit_rows: list[dict[str, object]] = []
     raw_item_count = 0
+    availability: dict[str, dict[str, str]] = {}
 
     for question_id in pilot_ids:
         question_text = questions.get(question_id)
@@ -337,19 +337,25 @@ def filter_evidence_fixture(
                 f"Pilot question {question_id} is absent from benchmark CSV"
             )
         raw_items = raw_questions.get(question_id, [])
-        if not isinstance(raw_items, list) or not all(
-            isinstance(item, dict) for item in raw_items
-        ):
+        if not isinstance(raw_items, list) or not all(isinstance(item, dict) for item in raw_items):
             raise ResearchContractError(
                 f"Evidence fixture entry {question_id} must be an item list"
             )
+        if isinstance(raw_states, dict) and question_id in raw_states:
+            state = EvidenceAvailability.from_dict(
+                raw_states[question_id], item_count=len(raw_items)
+            )
+        else:
+            state = EvidenceAvailability(
+                "unknown_incomplete",
+                "Legacy or missing acquisition state; completeness not attested",
+            )
+        availability[question_id] = state.to_dict()
         if not raw_items:
             continue
 
         subject, intent = extract_question_subject(question_text)
-        candidates: list[
-            tuple[bool, bool, int, EvidenceItem, tuple[str, ...]]
-        ] = []
+        candidates: list[tuple[bool, bool, int, EvidenceItem, tuple[str, ...]]] = []
         decisions: dict[str, dict[str, object]] = {}
         for raw_item in raw_items:
             item = EvidenceItem.from_dict(raw_item)
@@ -429,7 +435,13 @@ def filter_evidence_fixture(
 
         audit_rows.extend(decisions.values())
 
-    filtered_payload = {"questions": filtered, "schema_version": 1}
+    for question_id, items in filtered.items():
+        if availability[question_id]["status"] == "verified_complete" and not items:
+            availability[question_id] = EvidenceAvailability(
+                "verified_empty",
+                "Verified acquisition; no items qualified under lexical-relevance-v2",
+            ).to_dict()
+    filtered_payload = {"questions": filtered, "schema_version": 2, "availability": availability}
     filtered_path = output / "evidence-fixture.filtered.json"
     _write_json(filtered_path, filtered_payload)
 

@@ -146,7 +146,10 @@ def run_residual_development(args: argparse.Namespace) -> Path:
         _, blind_report = run_development_experiment(
             development_csv=pilot_csv,
             development_manifest=pilot_manifest,
-            evidence_provider=FileEvidenceProvider(evidence_fixture),
+            evidence_provider=FileEvidenceProvider(
+                evidence_fixture,
+                expected_fixture_hash=str(evidence_spec["filtered_fixture_sha256"]),
+            ),
             adapter=blind_adapter,
             output_directory=run_root / "blind",
             experiment_id="llama31-8b-market-residual-v1-blind-control",
@@ -167,7 +170,10 @@ def run_residual_development(args: argparse.Namespace) -> Path:
         _, market_report = run_development_experiment(
             development_csv=pilot_csv,
             development_manifest=pilot_manifest,
-            evidence_provider=FileEvidenceProvider(evidence_fixture),
+            evidence_provider=FileEvidenceProvider(
+                evidence_fixture,
+                expected_fixture_hash=str(evidence_spec["filtered_fixture_sha256"]),
+            ),
             adapter=residual_adapter,
             output_directory=run_root / "market-aware",
             experiment_id="llama31-8b-market-residual-v1-market-aware",

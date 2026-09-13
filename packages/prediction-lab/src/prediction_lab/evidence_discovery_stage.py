@@ -4,13 +4,14 @@ import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import pandas as pd
 
 from prediction_lab.commoncrawl_evidence import HistoricalEvidenceError, select_parent_event_pilot
 from prediction_lab.datasets import verify_frozen_dataset
 from prediction_lab.gdelt_evidence import GdeltArticle
+from prediction_lab.research_types import content_hash
 
 
 class DiscoveryProvider(Protocol):
@@ -90,9 +91,25 @@ def run_gdelt_discovery_stage(
 
     for row in pilot.itertuples(index=False):
         question_id = str(row.question_id)
+        acquisition_context_hash = content_hash(
+            {
+                "question_id": question_id,
+                "question_text": str(row.question_text),
+                "source_cutoff_at": str(row.source_cutoff_at),
+                "lookback_days": lookback_days,
+                "max_records": max_records,
+            }
+        )
         checkpoint = checkpoints / _checkpoint_name(question_id)
         if checkpoint.exists():
             cached = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if not isinstance(cached, dict) or cached.get("question_id") != question_id:
+                raise HistoricalEvidenceError("Discovery checkpoint identity mismatch")
+            cached_context = cached.get("acquisition_context_hash")
+            if cached_context is not None and cached_context != acquisition_context_hash:
+                raise HistoricalEvidenceError("Discovery checkpoint acquisition context mismatch")
+            if cached_context is None:
+                cached["acquisition_state"] = "unknown_incomplete"
             cached_error = str(cached.get("error") or "").strip()
             if not cached_error:
                 records.append(cached)
@@ -101,7 +118,7 @@ def run_gdelt_discovery_stage(
             retried_failed += 1
 
         attempted += 1
-        cutoff = pd.Timestamp(row.source_cutoff_at)
+        cutoff = pd.Timestamp(cast(str, row.source_cutoff_at))
         if cutoff.tzinfo is None:
             cutoff = cutoff.tz_localize("UTC")
         else:
@@ -121,12 +138,14 @@ def run_gdelt_discovery_stage(
 
         record: dict[str, object] = {
             "question_id": question_id,
+            "acquisition_context_hash": acquisition_context_hash,
             "question_text": str(row.question_text),
             "event_id": str(row.event_id),
-            "forecasted_at": pd.Timestamp(row.forecasted_at).isoformat(),
+            "forecasted_at": pd.Timestamp(cast(str, row.forecasted_at)).isoformat(),
             "source_cutoff_at": cutoff.isoformat(),
             "articles": [_article_dict(article) for article in articles],
             "article_count": len(articles),
+            "acquisition_state": "retrieval_failure" if error else "verified",
             "error": error,
         }
         _atomic_write_json(checkpoint, record)
@@ -150,9 +169,9 @@ def run_gdelt_discovery_stage(
     )
     audit.to_csv(output / "discovery-audit.csv", index=False, lineterminator="\n")
 
-    questions_with_results = sum(int(record["article_count"]) > 0 for record in records)
+    questions_with_results = sum(cast(int, record["article_count"]) > 0 for record in records)
     failures = sum(bool(record["error"]) for record in records)
-    total_articles = sum(int(record["article_count"]) for record in records)
+    total_articles = sum(cast(int, record["article_count"]) for record in records)
     summary: dict[str, object] = {
         "pilot_questions": len(records),
         "questions_with_results": questions_with_results,

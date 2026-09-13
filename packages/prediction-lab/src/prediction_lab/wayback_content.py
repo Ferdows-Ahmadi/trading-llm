@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from prediction_lab.research_types import EvidenceItem, ResearchContractError, parse_utc
+from prediction_lab.research_types import (
+    EvidenceAvailability,
+    EvidenceItem,
+    ResearchContractError,
+    parse_utc,
+)
 
 
 class WaybackContentError(ResearchContractError):
@@ -162,13 +167,9 @@ def _load_capture_rows(path: str | Path) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise WaybackContentError(
-                f"Malformed capture JSONL at line {line_number}"
-            ) from exc
+            raise WaybackContentError(f"Malformed capture JSONL at line {line_number}") from exc
         if not isinstance(record, dict):
-            raise WaybackContentError(
-                f"Capture JSONL line {line_number} is not an object"
-            )
+            raise WaybackContentError(f"Capture JSONL line {line_number} is not an object")
         rows.append(record)
     return rows
 
@@ -229,9 +230,7 @@ class WaybackReplayClient:
     def _pace(self) -> None:
         if self.minimum_interval_seconds == 0 or self._last_request_at is None:
             return
-        remaining = self.minimum_interval_seconds - (
-            time.monotonic() - self._last_request_at
-        )
+        remaining = self.minimum_interval_seconds - (time.monotonic() - self._last_request_at)
         if remaining > 0:
             time.sleep(remaining)
 
@@ -261,9 +260,7 @@ class WaybackReplayClient:
                         f"Wayback replay redirected instead of serving exact snapshot: {location}"
                     )
                 if response.status_code != 429 and response.status_code < 500:
-                    raise WaybackContentError(
-                        f"Wayback replay HTTP {response.status_code}"
-                    )
+                    raise WaybackContentError(f"Wayback replay HTTP {response.status_code}")
                 last_response = response
                 retry_after = response.headers.get("Retry-After")
                 if retry_after:
@@ -327,6 +324,12 @@ def freeze_wayback_content(
     reused = 0
     attempted = 0
     failures = 0
+    failed_questions = {
+        str(row.get("question_id"))
+        for row in captures
+        if row.get("lookup_status") == "transport_failure"
+        or row.get("acquisition_state") == "retrieval_failure"
+    }
 
     for question_id in sorted(selected):
         for row in selected[question_id]:
@@ -360,7 +363,26 @@ def freeze_wayback_content(
                     record = cached.get("record")
                     if not isinstance(record, dict):
                         raise WaybackContentError("Successful content checkpoint has no record")
+                    if (
+                        record.get("question_id") != question_id
+                        or record.get("article_url") != article_url
+                        or parse_utc(record.get("capture_timestamp"), field="cached capture")
+                        != capture_at
+                        or record.get("replay_url") != replay_url
+                    ):
+                        raise WaybackContentError("Cached content identity mismatch")
+                    raw_sha256 = str(record.get("raw_sha256") or "")
+                    if not re.fullmatch(r"[0-9a-f]{64}", raw_sha256):
+                        raise WaybackContentError("Invalid cached raw content digest")
+                    raw_path = raw_directory / f"{raw_sha256}.html"
+                    if (
+                        not raw_path.is_file()
+                        or hashlib.sha256(raw_path.read_bytes()).hexdigest() != raw_sha256
+                    ):
+                        raise WaybackContentError("Cached raw content digest mismatch")
                     text_sha256 = str(record.get("text_sha256") or "")
+                    if not re.fullmatch(r"[0-9a-f]{64}", text_sha256):
+                        raise WaybackContentError("Invalid cached text digest")
                     text_path = text_directory / f"{text_sha256}.txt"
                     if not text_path.exists():
                         raise WaybackContentError("Cached extracted text file is missing")
@@ -385,9 +407,7 @@ def freeze_wayback_content(
                 response = replay_client.fetch(replay_url)
                 content_type = response.headers.get("Content-Type", "").lower()
                 if content_type and "html" not in content_type:
-                    raise WaybackContentError(
-                        f"Archived snapshot is not HTML: {content_type}"
-                    )
+                    raise WaybackContentError(f"Archived snapshot is not HTML: {content_type}")
                 raw = response.content
                 if not raw:
                     raise WaybackContentError("Archived snapshot body is empty")
@@ -398,6 +418,7 @@ def freeze_wayback_content(
                     )
             except WaybackContentError as exc:
                 failures += 1
+                failed_questions.add(question_id)
                 _atomic_json(
                     checkpoint,
                     {
@@ -477,17 +498,41 @@ def freeze_wayback_content(
         ),
         encoding="utf-8",
     )
+    verified_questions = {
+        q
+        for q in evidence_by_question
+        if all(
+            row.get("acquisition_state") == "verified"
+            for row in captures
+            if str(row.get("question_id")) == q
+        )
+    }
     fixture = {
         "questions": {
             question_id: [item.to_dict() for item in evidence_by_question[question_id]]
             for question_id in sorted(evidence_by_question)
         },
-        "schema_version": 1,
+        "schema_version": 2,
+        "availability": {
+            question_id: EvidenceAvailability(
+                "retrieval_failure"
+                if question_id in failed_questions
+                else (
+                    "verified_complete" if evidence_by_question[question_id] else "verified_empty"
+                )
+                if question_id in verified_questions
+                else "unknown_incomplete",
+                "Archive retrieval failed"
+                if question_id in failed_questions
+                else "Declared bounded acquisition completed"
+                if question_id in verified_questions
+                else "Legacy capture records do not attest complete discovery/acquisition",
+            ).to_dict()
+            for question_id in sorted(evidence_by_question)
+        },
     }
     _atomic_json(output / "evidence-fixture.json", fixture)
-    fixture_sha256 = hashlib.sha256(
-        (output / "evidence-fixture.json").read_bytes()
-    ).hexdigest()
+    fixture_sha256 = hashlib.sha256((output / "evidence-fixture.json").read_bytes()).hexdigest()
     summary: dict[str, object] = {
         "attempted_this_run": attempted,
         "content_failures": failures,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 import pandas as pd
@@ -15,6 +15,7 @@ from prediction_lab.commoncrawl_evidence import (
     select_parent_event_pilot,
 )
 from prediction_lab.datasets import verify_frozen_dataset
+from prediction_lab.research_types import content_hash
 
 
 class CaptureLookup(Protocol):
@@ -39,7 +40,7 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
 
 def _utc(value: object, *, field: str) -> pd.Timestamp:
     try:
-        timestamp = pd.Timestamp(value)
+        timestamp = pd.Timestamp(cast(str, value))
     except (TypeError, ValueError) as exc:
         raise HistoricalEvidenceError(f"Invalid {field}: {value!r}") from exc
     if pd.isna(timestamp):
@@ -84,13 +85,9 @@ def _validate_cached_record(
     if not isinstance(cached, dict):
         raise HistoricalEvidenceError("Capture checkpoint must contain a JSON object")
     if str(cached.get("question_id") or "") != question_id:
-        raise HistoricalEvidenceError(
-            f"Capture checkpoint question mismatch for {question_id}"
-        )
+        raise HistoricalEvidenceError(f"Capture checkpoint question mismatch for {question_id}")
     if str(cached.get("article_url") or "") != url:
-        raise HistoricalEvidenceError(
-            f"Capture checkpoint URL mismatch for question {question_id}"
-        )
+        raise HistoricalEvidenceError(f"Capture checkpoint URL mismatch for question {question_id}")
     return cached
 
 
@@ -133,10 +130,7 @@ def run_commoncrawl_capture_stage(
         raise HistoricalEvidenceError("Capture stage accepts development rows only")
 
     pilot = select_parent_event_pilot(development, size=pilot_size)
-    pilot_by_id = {
-        str(row.question_id): row
-        for row in pilot.itertuples(index=False)
-    }
+    pilot_by_id = {str(row.question_id): row for row in pilot.itertuples(index=False)}
     discovery_records = _load_discovery(discovery_jsonl)
     discovery_by_id = {str(item["question_id"]): item for item in discovery_records}
     unexpected = sorted(set(discovery_by_id) - set(pilot_by_id))
@@ -157,19 +151,25 @@ def run_commoncrawl_capture_stage(
     for question_id, row in pilot_by_id.items():
         discovery = discovery_by_id.get(question_id)
         if discovery is None:
-            continue
+            discovery = {"source_cutoff_at": str(row.source_cutoff_at), "articles": []}
+        first_row = len(rows)
         cutoff = _utc(row.source_cutoff_at, field="source_cutoff_at")
         artifact_cutoff = _utc(discovery.get("source_cutoff_at"), field="discovery cutoff")
         if artifact_cutoff != cutoff:
-            raise HistoricalEvidenceError(
-                f"Discovery cutoff mismatch for question {question_id}"
-            )
+            raise HistoricalEvidenceError(f"Discovery cutoff mismatch for question {question_id}")
         raw_articles = discovery.get("articles", [])
         if not isinstance(raw_articles, list):
             raise HistoricalEvidenceError(
                 f"Discovery articles for question {question_id} are not a list"
             )
 
+        acquisition_context_hash = content_hash(
+            {
+                "discovery": discovery,
+                "max_urls_per_question": max_urls_per_question,
+                "max_collections": max_collections,
+            }
+        )
         seen_urls: set[str] = set()
         for raw_article in raw_articles:
             if len(seen_urls) >= max_urls_per_question:
@@ -192,6 +192,11 @@ def run_commoncrawl_capture_stage(
                     if cached.get("lookup_status") != status:
                         cached["lookup_status"] = status
                         _atomic_write_json(checkpoint, cached)
+                    cached["acquisition_state"] = (
+                        "verified"
+                        if cached.get("acquisition_context_hash") == acquisition_context_hash
+                        else "unknown_incomplete"
+                    )
                     rows.append(cached)
                     reused += 1
                     continue
@@ -223,6 +228,7 @@ def run_commoncrawl_capture_stage(
 
             record: dict[str, object] = {
                 "question_id": question_id,
+                "acquisition_context_hash": acquisition_context_hash,
                 "event_id": str(row.event_id),
                 "source_cutoff_at": cutoff.isoformat(),
                 "article_url": url,
@@ -235,6 +241,39 @@ def run_commoncrawl_capture_stage(
             }
             _atomic_write_json(checkpoint, record)
             rows.append(record)
+
+        question_rows = rows[first_row:]
+        if (
+            discovery.get("error")
+            or discovery.get("acquisition_state") == "retrieval_failure"
+            or any(r.get("error") for r in question_rows)
+        ):
+            acquisition_state = "retrieval_failure"
+        elif (
+            any(
+                not isinstance(a, dict) or not str(a.get("url") or "").strip() for a in raw_articles
+            )
+            or discovery.get("acquisition_state") != "verified"
+        ) or any(r.get("acquisition_state") == "unknown_incomplete" for r in question_rows):
+            acquisition_state = "unknown_incomplete"
+        else:
+            acquisition_state = "verified"
+        if not question_rows:
+            # Keep missing/empty discovery in the per-question acquisition ledger.
+            question_rows = [
+                {
+                    "question_id": question_id,
+                    "event_id": str(row.event_id),
+                    "source_cutoff_at": cutoff.isoformat(),
+                    "article_url": "",
+                    "capture_found": False,
+                    "lookup_status": "not_attempted",
+                    "error": discovery.get("error"),
+                }
+            ]
+            rows.extend(question_rows)
+        for question_record in question_rows:
+            question_record["acquisition_state"] = acquisition_state
 
     rows.sort(
         key=lambda item: (
@@ -261,13 +300,10 @@ def run_commoncrawl_capture_stage(
     audit.to_csv(output / "capture-audit.csv", index=False, lineterminator="\n")
 
     questions_with_discovery = sum(
-        bool(discovery_by_id.get(question_id, {}).get("articles"))
-        for question_id in pilot_by_id
+        bool(discovery_by_id.get(question_id, {}).get("articles")) for question_id in pilot_by_id
     )
     captured_question_ids = {
-        str(record["question_id"])
-        for record in rows
-        if record["lookup_status"] == "capture"
+        str(record["question_id"]) for record in rows if record["lookup_status"] == "capture"
     }
     captures_found = sum(record["lookup_status"] == "capture" for record in rows)
     failures = sum(record["lookup_status"] == "transport_failure" for record in rows)
@@ -276,7 +312,7 @@ def run_commoncrawl_capture_stage(
         "pilot_questions": len(pilot_by_id),
         "questions_with_discovery": questions_with_discovery,
         "questions_with_captures": len(captured_question_ids),
-        "urls_considered": len(rows),
+        "urls_considered": sum(bool(record["article_url"]) for record in rows),
         "captures_found": captures_found,
         "urls_without_capture": no_capture,
         "lookup_failures": failures,

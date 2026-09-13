@@ -150,12 +150,46 @@ class EvidenceItem:
 
 
 @dataclass(frozen=True)
+class EvidenceAvailability:
+    """Operational acquisition state; never projected into historical model evidence."""
+
+    status: str
+    detail: str
+
+    @classmethod
+    def from_dict(cls, value: object, *, item_count: int) -> EvidenceAvailability:
+        if not isinstance(value, dict) or set(value) != {"status", "detail"}:
+            raise ResearchContractError("Evidence availability requires status and detail")
+        status = value["status"]
+        if status not in (
+            "verified_complete",
+            "verified_empty",
+            "retrieval_failure",
+            "unknown_incomplete",
+        ):
+            raise ResearchContractError("Unknown evidence availability status")
+        if status == "verified_empty" and item_count != 0:
+            raise ResearchContractError("Verified empty evidence cannot contain items")
+        if status == "verified_complete" and item_count == 0:
+            raise ResearchContractError("Complete evidence without items must be verified_empty")
+        return cls(status, _non_empty(value["detail"], field="availability detail"))
+
+    def to_dict(self) -> dict[str, str]:
+        return {"status": self.status, "detail": self.detail}
+
+    def assert_usable(self) -> None:
+        if self.status not in {"verified_complete", "verified_empty"}:
+            raise ResearchContractError(f"Evidence acquisition is not verified: {self.status}")
+
+
+@dataclass(frozen=True)
 class EvidencePacket:
     question_id: str
     forecasted_at: datetime
     research_cutoff_at: datetime
     evidence_items: tuple[EvidenceItem, ...]
     packet_hash: str
+    availability: EvidenceAvailability | None = None
 
     @classmethod
     def create(
@@ -165,6 +199,7 @@ class EvidencePacket:
         forecasted_at: object,
         research_cutoff_at: object,
         evidence_items: Sequence[EvidenceItem],
+        availability: EvidenceAvailability | None = None,
     ) -> EvidencePacket:
         question = _non_empty(question_id, field="question_id")
         forecast_time = parse_utc(forecasted_at, field="forecasted_at")
@@ -180,18 +215,26 @@ class EvidencePacket:
                 raise ResearchContractError(
                     f"Evidence {item.source_id} is newer than research cutoff"
                 )
-        payload = {
+        payload: dict[str, object] = {
             "evidence_items": [item.to_dict() for item in items],
             "forecasted_at": format_utc(forecast_time),
             "question_id": question,
             "research_cutoff_at": format_utc(cutoff),
         }
+        if availability is not None:
+            availability = EvidenceAvailability.from_dict(
+                availability.to_dict(),
+                item_count=len(items),
+            )
+            payload["availability"] = availability.to_dict()
+            payload["schema_version"] = 2
         return cls(
             question_id=question,
             forecasted_at=forecast_time,
             research_cutoff_at=cutoff,
             evidence_items=items,
             packet_hash=content_hash(payload),
+            availability=availability,
         )
 
     @classmethod
@@ -199,11 +242,20 @@ class EvidencePacket:
         raw_items = value.get("evidence_items")
         if not isinstance(raw_items, list) or not all(isinstance(item, dict) for item in raw_items):
             raise ResearchContractError("evidence_items must be a list of objects")
+        availability = None
+        if "schema_version" in value or "availability" in value:
+            if value.get("schema_version") != 2:
+                raise ResearchContractError("Unknown evidence packet schema")
+            availability = EvidenceAvailability.from_dict(
+                value.get("availability"),
+                item_count=len(raw_items),
+            )
         packet = cls.create(
             question_id=value.get("question_id"),  # type: ignore[arg-type]
             forecasted_at=value.get("forecasted_at"),
             research_cutoff_at=value.get("research_cutoff_at"),
             evidence_items=[EvidenceItem.from_dict(item) for item in raw_items],
+            availability=availability,
         )
         expected = value.get("packet_hash")
         if expected is not None and expected != packet.packet_hash:
@@ -221,13 +273,17 @@ class EvidencePacket:
                 )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "evidence_items": [item.to_dict() for item in self.evidence_items],
             "forecasted_at": format_utc(self.forecasted_at),
             "packet_hash": self.packet_hash,
             "question_id": self.question_id,
             "research_cutoff_at": format_utc(self.research_cutoff_at),
         }
+        if self.availability is not None:
+            payload["availability"] = self.availability.to_dict()
+            payload["schema_version"] = 2
+        return payload
 
 
 @dataclass(frozen=True)
@@ -381,6 +437,14 @@ class ForecastArtifact:
     raw_structured_model_output: Mapping[str, object]
     cache_key: str
     artifact_hash: str
+    residual_decision_json: bytes | None = None
+
+    @property
+    def residual_decision(self) -> dict[str, Any] | None:
+        if self.residual_decision_json is None:
+            return None
+        value: dict[str, Any] = json.loads(self.residual_decision_json)
+        return value
 
     @classmethod
     def create(
@@ -399,6 +463,7 @@ class ForecastArtifact:
         evidence_packet_hash: str,
         raw_structured_model_output: Mapping[str, object],
         cache_key: str,
+        residual_decision: Mapping[str, object] | None = None,
     ) -> ForecastArtifact:
         if blind_or_market_aware not in {"blind", "market-aware"}:
             raise ResearchContractError("Invalid forecast mode")
@@ -431,6 +496,22 @@ class ForecastArtifact:
             "raw_structured_model_output": raw,
             "updated_probability": output.updated_probability,
         }
+        decision_bytes = None
+        if residual_decision is not None:
+            decision = dict(residual_decision)
+            if (
+                blind_or_market_aware != "market-aware"
+                or decision.get("final_probability") != output.final_probability
+                or decision.get("market_probability") != output.base_rate_probability
+                or output.updated_probability != output.final_probability
+                or decision.get("cited_source_ids") != list(output.cited_source_ids)
+            ):
+                raise ResearchContractError("Residual decision diverges from scored forecast")
+            decision_bytes = canonical_json_bytes(decision)
+            payload["schema_version"] = 2
+            payload["residual_decision"] = decision
+        if prompt_version == "market-residual-v2" and residual_decision is None:
+            raise ResearchContractError("Residual-v2 artifact requires a bound residual decision")
         digest = content_hash(payload)
         return cls(
             experiment_id=str(payload["experiment_id"]),
@@ -452,6 +533,7 @@ class ForecastArtifact:
             raw_structured_model_output=frozen_raw,
             cache_key=str(payload["cache_key"]),
             artifact_hash=digest,
+            residual_decision_json=decision_bytes,
         )
 
     @classmethod
@@ -461,6 +543,10 @@ class ForecastArtifact:
         if not isinstance(raw_output, dict) or not isinstance(metadata, dict):
             raise ResearchContractError("Malformed forecast artifact")
         output = StructuredForecastOutput.from_mapping(raw_output)
+        decision = value.get("residual_decision")
+        if "schema_version" in value or "residual_decision" in value:
+            if value.get("schema_version") != 2 or not isinstance(decision, dict):
+                raise ResearchContractError("Malformed bound residual artifact")
         artifact = cls.create(
             experiment_id=value.get("experiment_id"),  # type: ignore[arg-type]
             benchmark_hash=value.get("benchmark_hash"),  # type: ignore[arg-type]
@@ -475,6 +561,7 @@ class ForecastArtifact:
             evidence_packet_hash=value.get("evidence_packet_hash"),  # type: ignore[arg-type]
             raw_structured_model_output=raw_output,
             cache_key=value.get("cache_key"),  # type: ignore[arg-type]
+            residual_decision=decision,  # type: ignore[arg-type]
         )
         if value.get("artifact_hash") != artifact.artifact_hash:
             raise ResearchContractError("Forecast artifact hash mismatch")
@@ -485,7 +572,7 @@ class ForecastArtifact:
     def to_dict(self) -> dict[str, Any]:
         raw_output = dict(self.raw_structured_model_output)
         raw_output["cited_source_ids"] = list(self.cited_source_ids)
-        return {
+        payload: dict[str, Any] = {
             "artifact_hash": self.artifact_hash,
             "base_rate_probability": self.base_rate_probability,
             "benchmark_hash": self.benchmark_hash,
@@ -506,3 +593,7 @@ class ForecastArtifact:
             "raw_structured_model_output": raw_output,
             "updated_probability": self.updated_probability,
         }
+        if self.residual_decision_json is not None:
+            payload["schema_version"] = 2
+            payload["residual_decision"] = self.residual_decision
+        return payload

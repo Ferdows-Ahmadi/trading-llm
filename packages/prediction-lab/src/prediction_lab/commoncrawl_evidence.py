@@ -9,13 +9,13 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 import numpy as np
 import pandas as pd
-from warcio.archiveiterator import ArchiveIterator
+from warcio.archiveiterator import ArchiveIterator  # type: ignore[import-untyped]
 
 from prediction_lab.datasets import verify_frozen_dataset
 from prediction_lab.research_types import EvidenceItem
@@ -117,7 +117,7 @@ class _VisibleTextParser(HTMLParser):
 
 def _utc_timestamp(value: object, *, field: str) -> pd.Timestamp:
     try:
-        timestamp = pd.Timestamp(value)
+        timestamp = pd.Timestamp(cast(str, value))
     except (TypeError, ValueError) as exc:
         raise HistoricalEvidenceError(f"Invalid {field}: {value!r}") from exc
     if pd.isna(timestamp):
@@ -192,12 +192,8 @@ def select_parent_event_pilot(cases: pd.DataFrame, *, size: int = 20) -> pd.Data
         raise HistoricalEvidenceError(f"Development dataset is missing columns: {missing}")
 
     safe = cases[list(required)].copy()
-    safe["forecasted_at"] = pd.to_datetime(
-        safe["forecasted_at"], utc=True, errors="raise"
-    )
-    safe["source_cutoff_at"] = pd.to_datetime(
-        safe["source_cutoff_at"], utc=True, errors="raise"
-    )
+    safe["forecasted_at"] = pd.to_datetime(safe["forecasted_at"], utc=True, errors="raise")
+    safe["source_cutoff_at"] = pd.to_datetime(safe["source_cutoff_at"], utc=True, errors="raise")
     safe.sort_values(["forecasted_at", "question_id"], inplace=True)
     representatives = safe.drop_duplicates("event_id", keep="first").reset_index(drop=True)
     if len(representatives) <= size:
@@ -209,17 +205,13 @@ def select_parent_event_pilot(cases: pd.DataFrame, *, size: int = 20) -> pd.Data
 def load_market_records(path: str | Path) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     source = Path(path)
-    for line_number, line in enumerate(
-        source.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
         try:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise HistoricalEvidenceError(
-                f"Malformed market JSONL at line {line_number}"
-            ) from exc
+            raise HistoricalEvidenceError(f"Malformed market JSONL at line {line_number}") from exc
         if not isinstance(item, dict) or not item.get("id"):
             raise HistoricalEvidenceError(f"Market JSONL line {line_number} has no id")
         records[str(item["id"])] = item
@@ -297,7 +289,9 @@ class CommonCrawlClient:
         last_response: httpx.Response | None = None
         for attempt in range(self.retries):
             try:
-                response = self._client.get(url, params=params, headers=headers)
+                response = self._client.get(
+                    url, params=cast(dict[str, str | int] | None, params), headers=headers
+                )
                 last_response = response
                 if response.status_code != 429 and response.status_code < 500:
                     return response
@@ -321,9 +315,7 @@ class CommonCrawlClient:
         payload = response.json()
         if not isinstance(payload, list):
             raise HistoricalEvidenceError("Common Crawl collection index must be a list")
-        self._collections = [
-            item for item in payload if isinstance(item, dict) and item.get("id")
-        ]
+        self._collections = [item for item in payload if isinstance(item, dict) and item.get("id")]
         return self._collections
 
     def _eligible_collections(
@@ -356,10 +348,7 @@ class CommonCrawlClient:
             max_collections=max_collections,
         ):
             crawl_id = str(collection["id"])
-            endpoint = str(
-                collection.get("cdx-api")
-                or f"{self.index_url}/{crawl_id}-index"
-            )
+            endpoint = str(collection.get("cdx-api") or f"{self.index_url}/{crawl_id}-index")
             for variant in _url_variants(url):
                 response = self._get(
                     endpoint,
@@ -419,13 +408,9 @@ class CommonCrawlClient:
                     content = record.content_stream().read()
                     break
         except Exception as exc:
-            raise HistoricalEvidenceError(
-                "Could not parse Common Crawl WARC record"
-            ) from exc
+            raise HistoricalEvidenceError("Could not parse Common Crawl WARC record") from exc
         if not content:
-            raise HistoricalEvidenceError(
-                "Common Crawl WARC record contained no response body"
-            )
+            raise HistoricalEvidenceError("Common Crawl WARC record contained no response body")
 
         html = content.decode("utf-8", errors="replace")
         parser = _VisibleTextParser()
@@ -460,6 +445,7 @@ def build_commoncrawl_pilot(
     pilot = select_parent_event_pilot(development, size=pilot_size)
     markets = load_market_records(source_markets_jsonl)
     questions: dict[str, list[dict[str, object]]] = {}
+    availability: dict[str, dict[str, str]] = {}
     audit_rows: list[dict[str, object]] = []
     domains: Counter[str] = Counter()
 
@@ -468,9 +454,7 @@ def build_commoncrawl_pilot(
         cutoff = _utc_timestamp(row.source_cutoff_at, field="source_cutoff_at")
         market = markets.get(question_id)
         if market is None:
-            raise HistoricalEvidenceError(
-                f"Frozen source market missing question {question_id}"
-            )
+            raise HistoricalEvidenceError(f"Frozen source market missing question {question_id}")
 
         reference_urls = extract_reference_urls(market)[:max_reference_urls]
         evidence: list[EvidenceItem] = []
@@ -499,9 +483,7 @@ def build_commoncrawl_pilot(
                 errors.append(f"fetch {reference_url}: {exc}")
                 continue
             if capture.timestamp > cutoff:
-                raise HistoricalEvidenceError(
-                    "Common Crawl returned post-cutoff evidence"
-                )
+                raise HistoricalEvidenceError("Common Crawl returned post-cutoff evidence")
 
             seen_digests.add(capture.digest)
             domains[urlparse(capture.url).netloc.lower()] += 1
@@ -522,6 +504,14 @@ def build_commoncrawl_pilot(
             )
 
         questions[question_id] = [item.to_dict() for item in evidence]
+        availability[question_id] = {
+            "status": "retrieval_failure"
+            if errors
+            else "verified_complete"
+            if evidence
+            else "verified_empty",
+            "detail": " | ".join(errors) if errors else "Declared bounded acquisition completed",
+        }
         latest_capture = max(
             (item.available_at for item in evidence),
             default=None,
@@ -582,7 +572,8 @@ def build_commoncrawl_pilot(
         ),
     }
     fixture: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "questions": questions,
+        "availability": availability,
     }
     return fixture, summary, audit

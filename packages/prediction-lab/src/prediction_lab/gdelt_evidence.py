@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -142,7 +142,7 @@ class ArchiveLookup(Protocol):
 
 def _utc(value: object, *, field: str) -> pd.Timestamp:
     try:
-        result = pd.Timestamp(value)
+        result = pd.Timestamp(cast(str, value))
     except (TypeError, ValueError) as exc:
         raise HistoricalEvidenceError(f"Invalid {field}: {value!r}") from exc
     if pd.isna(result):
@@ -203,7 +203,7 @@ def build_gdelt_query(question_text: str, *, max_terms: int = 5) -> str:
     if anchor.lower() in _MAJOR_CRYPTO_ASSETS:
         return anchor
     if question_tokens & _CRYPTO_CONTEXT_MARKERS:
-        return f'{anchor} (token OR crypto OR blockchain)'
+        return f"{anchor} (token OR crypto OR blockchain)"
     supporting = terms[1:max_terms]
     if not supporting:
         return anchor
@@ -253,7 +253,7 @@ class GdeltDocClient:
         if remaining > 0:
             time.sleep(remaining)
 
-    def _request(self, params: dict[str, object]) -> dict[str, Any]:
+    def _request(self, params: dict[str, str | int]) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.retries):
             self._pace()
@@ -365,20 +365,18 @@ class FastCommonCrawlClient(CommonCrawlClient):
             if (urlparse(variant).path or "/") == requested_path
         ]
         transport_errors: list[str] = []
-        for collection in self._eligible_collections(  # type: ignore[attr-defined]
+        for collection in self._eligible_collections(
             cutoff_at,
             max_collections=max_collections,
         ):
             crawl_id = str(collection["id"])
-            endpoint = str(
-                collection.get("cdx-api") or f"{self.index_url}/{crawl_id}-index"
-            )
+            endpoint = str(collection.get("cdx-api") or f"{self.index_url}/{crawl_id}-index")
             for variant in variants:
                 try:
-                    response = self._get(  # type: ignore[attr-defined]
+                    response = self._get(
                         endpoint,
                         params={"url": variant, "output": "json"},
-                        headers=self._headers,  # type: ignore[attr-defined]
+                        headers=self._headers,
                     )
                 except (HistoricalEvidenceError, httpx.HTTPError) as exc:
                     transport_errors.append(f"{variant}: {exc}")
@@ -446,6 +444,7 @@ def build_gdelt_commoncrawl_pilot(
 
     pilot = select_parent_event_pilot(development, size=pilot_size)
     questions: dict[str, list[dict[str, object]]] = {}
+    availability: dict[str, dict[str, str]] = {}
     audit_rows: list[dict[str, object]] = []
     domains: Counter[str] = Counter()
     retrieved_at = datetime.now(UTC).isoformat()
@@ -517,6 +516,14 @@ def build_gdelt_commoncrawl_pilot(
             )
 
         questions[question_id] = [item.to_dict() for item in evidence]
+        availability[question_id] = {
+            "status": "retrieval_failure"
+            if errors
+            else "verified_complete"
+            if evidence
+            else "verified_empty",
+            "detail": " | ".join(errors) if errors else "Declared bounded acquisition completed",
+        }
         latest = max((item.available_at for item in evidence), default=None)
         age_hours = (
             (cutoff.to_pydatetime() - latest).total_seconds() / 3600.0
@@ -550,9 +557,9 @@ def build_gdelt_commoncrawl_pilot(
         "coverage_rate": covered / len(audit) if len(audit) else 0.0,
         "total_evidence_items": int(audit["evidence_item_count"].sum()),
         "source_domains": dict(sorted(domains.items())),
-        "zero_evidence_question_ids": audit.loc[
-            audit["evidence_item_count"] == 0, "question_id"
-        ].astype(str).tolist(),
+        "zero_evidence_question_ids": audit.loc[audit["evidence_item_count"] == 0, "question_id"]
+        .astype(str)
+        .tolist(),
         "latest_evidence_age_hours": {
             "min": float(ages.min()) if not ages.empty else None,
             "median": float(ages.median()) if not ages.empty else None,
@@ -574,4 +581,8 @@ def build_gdelt_commoncrawl_pilot(
             "selection does not consult outcomes or market probabilities"
         ),
     }
-    return {"schema_version": 1, "questions": questions}, summary, audit
+    return (
+        {"schema_version": 2, "questions": questions, "availability": availability},
+        summary,
+        audit,
+    )

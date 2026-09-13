@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from prediction_lab.artifact_identity import download_verified_artifact
 from prediction_lab.datasets import verify_frozen_dataset
 from prediction_lab.evidence import FileEvidenceProvider
 from prediction_lab.experiments import run_development_experiment
@@ -25,12 +26,11 @@ PILOT_ARTIFACT_DIGEST = "sha256:c8b24dd5b92fd36625d756ea4f94d98841ce8303757190d2
 PILOT_DATASET_SHA256 = "d27e2b84cf1f3bc9bdeb4904e15791aad5d2e586685b7f32ab1647d15eee41ce"
 EVIDENCE_RUN_ID = 34529685281
 EVIDENCE_ARTIFACT = "evidence-relevance-filter-v0.1"
-EVIDENCE_ARTIFACT_DIGEST = (
-    "sha256:bf76e2545f3cf30b89199b64c51c109ab51cc0c6cd7b5e3c3c9481be5a285aec"
-)
+EVIDENCE_ARTIFACT_DIGEST = "sha256:bf76e2545f3cf30b89199b64c51c109ab51cc0c6cd7b5e3c3c9481be5a285aec"
 FILTERED_FIXTURE_SHA256 = "6c5d203feb47b13f15cfe46bbf58d327629544bd9aba61bfed140c30feb92108"
 PROVENANCE_PATH = Path("docs/models/meta-llama-3.1-8b-instruct-provenance.json")
 DEFAULT_MODEL = "llama3.1:8b"
+FROZEN_MODEL_DIGEST = "sha256:46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e"
 _DIGEST_RE = re.compile(r"^(?:sha256:)?([0-9a-f]{64})$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -181,6 +181,10 @@ def _ensure_model(
     base_url: str,
     refresh: bool,
 ) -> str:
+    if model != DEFAULT_MODEL:
+        raise ResearchContractError(
+            "Frozen development runner requires the preregistered model tag"
+        )
     ollama = _which("ollama")
     digest = _select_model_digest(_fetch_ollama_tags(base_url), model)
     if refresh or digest is None:
@@ -188,6 +192,8 @@ def _ensure_model(
         digest = _select_model_digest(_fetch_ollama_tags(base_url), model)
     if digest is None:
         raise ResearchContractError(f"Ollama model {model!r} is not installed after pull")
+    if digest != FROZEN_MODEL_DIGEST:
+        raise ResearchContractError("Frozen development model digest mismatch")
     return digest
 
 
@@ -259,41 +265,40 @@ def _download_frozen_inputs(
     run_root: Path,
     evidence_spec: dict[str, object],
 ) -> tuple[Path, Path]:
-    gh = _which("gh")
+    del repository_root
     inputs = run_root / "inputs"
     pilot_dir = inputs / "development-pilot"
     evidence_dir = inputs / "filtered-evidence"
     inputs.mkdir(parents=True, exist_ok=False)
 
-    _run(
-        gh,
-        [
-            "run",
-            "download",
-            str(PILOT_RUN_ID),
-            "-R",
-            REPOSITORY,
-            "-n",
-            PILOT_ARTIFACT,
-            "-D",
-            str(pilot_dir),
-        ],
-        cwd=repository_root,
+    download_verified_artifact(
+        repository=REPOSITORY,
+        run_id=PILOT_RUN_ID,
+        name=PILOT_ARTIFACT,
+        digest=PILOT_ARTIFACT_DIGEST,
+        destination=pilot_dir,
+        allowed_files=frozenset({"development-pilot.csv", "development-pilot.manifest.json"}),
     )
-    _run(
-        gh,
-        [
-            "run",
-            "download",
-            str(evidence_spec["workflow_run"]),
-            "-R",
-            REPOSITORY,
-            "-n",
-            str(evidence_spec["artifact"]),
-            "-D",
-            str(evidence_dir),
-        ],
-        cwd=repository_root,
+    download_verified_artifact(
+        repository=REPOSITORY,
+        run_id=int(str(evidence_spec["workflow_run"])),
+        name=str(evidence_spec["artifact"]),
+        digest=str(evidence_spec["artifact_digest"]),
+        code_commit=(
+            str(evidence_spec["artifact_code_commit"])
+            if evidence_spec.get("artifact_code_commit") is not None
+            else None
+        ),
+        destination=evidence_dir,
+        allowed_files=frozenset(
+            {
+                "evidence-fixture.filtered.json",
+                "relevance-summary.json",
+                "relevance-audit.csv",
+                "code-commit.txt",
+                "preregistration-commit.txt",
+            }
+        ),
     )
     return pilot_dir, evidence_dir
 
@@ -304,9 +309,7 @@ def _validate_frozen_inputs(
     evidence_spec: dict[str, object],
 ) -> tuple[Path, Path, Path]:
     forbidden = [
-        path
-        for directory in (pilot_dir, evidence_dir)
-        for path in directory.rglob("holdout*")
+        path for directory in (pilot_dir, evidence_dir) for path in directory.rglob("holdout*")
     ]
     if forbidden:
         raise ResearchContractError(
@@ -353,12 +356,10 @@ def _validate_frozen_inputs(
         except OSError as exc:
             raise ResearchContractError(f"Missing frozen evidence marker {filename}") from exc
         if actual != expected:
-            raise ResearchContractError(
-                f"Frozen evidence marker {filename} changed: {actual!r}"
-            )
+            raise ResearchContractError(f"Frozen evidence marker {filename} changed: {actual!r}")
 
     fixture = _load_json(evidence_fixture)
-    FileEvidenceProvider(evidence_fixture)
+    FileEvidenceProvider(evidence_fixture, expected_fixture_hash=expected_fixture_hash)
     questions = fixture.get("questions")
     if not isinstance(questions, dict):
         raise ResearchContractError("Filtered evidence fixture is missing questions mapping")
@@ -368,6 +369,8 @@ def _validate_frozen_inputs(
 
 
 def _build_model_metadata(repository_root: Path, immutable_digest: str) -> ModelMetadata:
+    if immutable_digest != FROZEN_MODEL_DIGEST:
+        raise ResearchContractError("Cannot assign Llama provenance to an unregistered digest")
     provenance = _load_json(repository_root / PROVENANCE_PATH)
     required = {
         "provider": "Meta",
@@ -466,7 +469,10 @@ def run_local_development(args: argparse.Namespace) -> Path:
             summary, report_path = run_development_experiment(
                 development_csv=pilot_csv,
                 development_manifest=pilot_manifest,
-                evidence_provider=FileEvidenceProvider(evidence_fixture),
+                evidence_provider=FileEvidenceProvider(
+                    evidence_fixture,
+                    expected_fixture_hash=str(evidence_spec["filtered_fixture_sha256"]),
+                ),
                 adapter=adapter,
                 output_directory=run_root / mode,
                 experiment_id=f"llama31-8b-development-v0.1-{mode}",
