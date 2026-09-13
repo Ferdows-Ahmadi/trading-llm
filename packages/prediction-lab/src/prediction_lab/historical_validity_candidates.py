@@ -130,7 +130,9 @@ def build_fresh_candidates(
     if candidates["event_id"].nunique() != len(candidates):
         raise ResearchContractError("Fresh candidate cohort is not event-independent")
     if set(candidates["event_id"]) & PILOT_EVENT_IDS:
-        raise ResearchContractError("Fresh candidate cohort contains a repeatedly inspected pilot event")
+        raise ResearchContractError(
+            "Fresh candidate cohort contains a repeatedly inspected pilot event"
+        )
     return candidates
 
 
