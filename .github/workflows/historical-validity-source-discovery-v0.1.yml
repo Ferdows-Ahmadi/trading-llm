@@ -1,0 +1,173 @@
+name: Historical Validity Source Discovery v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-validity-source-discovery-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/historical_validity_sources.py
+      - packages/prediction-lab/tests/test_historical_validity_sources.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  discover-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen source-discovery contract
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor c3a66d28d7126155935ccdd255034e7560dce6f0 "$GITHUB_SHA"
+          git merge-base --is-ancestor 4cceb901a29553ccad7b1e150558ee57906c12f1 "$GITHUB_SHA"
+          git merge-base --is-ancestor bfcb5bf7197d3d6fd596a494503cb31cf1e19bd8 "$GITHUB_SHA"
+          pytest -q packages/prediction-lab/tests/test_historical_validity_sources.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/historical_validity_sources.py \
+            packages/prediction-lab/tests/test_historical_validity_sources.py
+          gh auth status
+
+      - name: Download exact frozen candidate artifact
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=Path(os.environ["RUNNER_TEMP"]) / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          PY
+
+      - name: Discover and freeze historical source captures
+        run: |
+          mkdir -p "$RUNNER_TEMP/historical-validity-sources"
+          python -m prediction_lab.historical_validity_sources \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/historical-validity-sources" \
+            --code-commit "$GITHUB_SHA"
+          printf '%s\n' "$GITHUB_SHA" \
+            > "$RUNNER_TEMP/historical-validity-sources/code-commit.txt"
+          printf '%s\n' c3a66d28d7126155935ccdd255034e7560dce6f0 \
+            > "$RUNNER_TEMP/historical-validity-sources/parent-preregistration-commit.txt"
+          printf '%s\n' 4cceb901a29553ccad7b1e150558ee57906c12f1 \
+            > "$RUNNER_TEMP/historical-validity-sources/source-discovery-protocol-commit.txt"
+          printf '%s\n' bfcb5bf7197d3d6fd596a494503cb31cf1e19bd8 \
+            > "$RUNNER_TEMP/historical-validity-sources/source-discovery-clarification-commit.txt"
+
+      - name: Require complete candidate accounting and redacted current locators
+        run: |
+          python - "$RUNNER_TEMP/historical-validity-sources" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          summary = json.loads((root / "source-discovery-summary.json").read_text())
+          if summary.get("candidate_rows") != 64:
+              raise SystemExit("source discovery did not account for all 64 candidates")
+          if summary.get("candidate_sha256") != (
+              "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
+          ):
+              raise SystemExit("candidate identity changed")
+          if summary.get("code_commit") != (root / "code-commit.txt").read_text().strip():
+              raise SystemExit("source-discovery code commit mismatch")
+
+          locators = [
+              json.loads(line)
+              for line in (root / "locators.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          if len(locators) != 64 or len({row["question_id"] for row in locators}) != 64:
+              raise SystemExit("locator ledger does not contain exactly all candidates")
+
+          forbidden_current_keys = {
+              "outcomePrices",
+              "volume",
+              "volumeNum",
+              "bestBid",
+              "bestAsk",
+              "lastTradePrice",
+          }
+
+          def keys(value):
+              if isinstance(value, dict):
+                  result = set(value)
+                  for child in value.values():
+                      result |= keys(child)
+                  return result
+              if isinstance(value, list):
+                  result = set()
+                  for child in value:
+                      result |= keys(child)
+                  return result
+              return set()
+
+          for row in locators:
+              locator = row.get("locator")
+              if locator is not None and forbidden_current_keys & keys(locator):
+                  raise SystemExit("current locator leaked forbidden price/outcome metadata")
+
+          lookups = [
+              json.loads(line)
+              for line in (root / "wayback-lookups.jsonl").read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+          known = {row["question_id"] for row in locators}
+          if any(row.get("question_id") not in known for row in lookups):
+              raise SystemExit("Wayback ledger contains an unknown candidate")
+          allowed_statuses = {"capture", "no_capture", "transport_failure", "replay_failure"}
+          if any(row.get("lookup_status") not in allowed_statuses for row in lookups):
+              raise SystemExit("Wayback ledger contains an unknown status")
+
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload frozen source-discovery artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.1
+          path: ${{ runner.temp }}/historical-validity-sources/
+          if-no-files-found: warn
+          retention-days: 90
