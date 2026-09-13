@@ -5,9 +5,9 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from prediction_lab import prospective_evidence_v01 as evidence
 from prediction_lab.commoncrawl_evidence import CommonCrawlCapture, HistoricalEvidenceError
 from prediction_lab.gdelt_evidence import GdeltArticle
-from prediction_lab import prospective_evidence_v01 as evidence
 from prediction_lab.research_types import ResearchContractError
 
 
@@ -51,7 +51,11 @@ def capture(*, timestamp: str = "2026-09-12T11:00:00Z") -> CommonCrawlCapture:
 
 
 class FakeDiscovery:
-    def __init__(self, results: list[GdeltArticle] | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        results: list[GdeltArticle] | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self.results = results or []
         self.error = error
         self.calls: list[dict[str, Any]] = []
@@ -218,9 +222,7 @@ def test_gdelt_provider_failure_is_not_relabelled_empty() -> None:
 
 
 def test_post_cutoff_capture_fails_closed() -> None:
-    archive = FakeArchive(
-        capture_value=capture(timestamp="2026-09-14T00:00:00Z")
-    )
+    archive = FakeArchive(capture_value=capture(timestamp="2026-09-14T00:00:00Z"))
     with pytest.raises(ResearchContractError, match="Post-cutoff evidence"):
         acquire(FakeDiscovery([article()]), archive)
 
