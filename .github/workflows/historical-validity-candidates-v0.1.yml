@@ -53,6 +53,7 @@ jobs:
       - name: Download verified development-only custody derivative
         run: |
           python - <<'PY'
+          import os
           from pathlib import Path
 
           from prediction_lab.artifact_identity import download_verified_artifact
@@ -62,7 +63,7 @@ jobs:
               run_id=34738355385,
               name="polymarket-development-v0.1-custody-derivative",
               digest="sha256:6b07738113cc4bd0f04e634459bb0eb8ac34f2ceb75ffe3b9989c9e81ef95d20",
-              destination=Path("${RUNNER_TEMP}") / "development-only",
+              destination=Path(os.environ["RUNNER_TEMP"]) / "development-only",
               allowed_files=frozenset(
                   {"development.csv", "development.manifest.json", "custody-receipt.json"}
               ),
