@@ -6,8 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 from prediction_lab.prospective_polymarket_custody import (
-    FrozenResponse,
     SELECTION_SEED,
+    FrozenResponse,
     _rank,
     collect_prospective_custody,
     structural_check,
