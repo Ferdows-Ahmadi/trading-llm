@@ -1,6 +1,6 @@
 name: Prospective Development Custody v0.1
 
-# Post-keyset-recovery execution trigger; scientific rules are unchanged.
+# Execute the preregistered keyset-pagination recovery; scientific rules are unchanged.
 on:
   push:
     branches:
@@ -14,6 +14,7 @@ permissions:
 
 env:
   PROTOCOL_COMMIT: 1562a16f835f1b75f878341146fa7a867f2439e5
+  PAGINATION_AMENDMENT_COMMIT: e1f2570c9f0f342d41426c411fc8c8bbeafd8bc1
 
 jobs:
   custody:
@@ -42,14 +43,25 @@ jobs:
           test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$PROTOCOL_COMMIT" "$GITHUB_SHA"
-          pytest -q packages/prediction-lab/tests/test_prospective_polymarket_custody.py
+          git merge-base --is-ancestor "$PAGINATION_AMENDMENT_COMMIT" "$GITHUB_SHA"
+          python - <<'PY'
+          import os
+          from prediction_lab import prospective_polymarket_custody_keyset as keyset
+
+          assert keyset.PAGINATION_AMENDMENT_COMMIT == os.environ["PAGINATION_AMENDMENT_COMMIT"]
+          PY
+          pytest -q \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py
           ruff check \
             packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody.py \
-            packages/prediction-lab/tests/test_prospective_polymarket_custody.py
+            packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody_keyset.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_keyset.py
 
       - name: Acquire and freeze one-time prospective market custody
         run: |
-          python -m prediction_lab.prospective_polymarket_custody \
+          python -m prediction_lab.prospective_polymarket_custody_keyset \
             "$RUNNER_TEMP/prospective-development-custody-v0.1" \
             --code-commit "$GITHUB_SHA"
 
@@ -73,6 +85,8 @@ jobs:
               if line.strip()
           ]
           assert summary["protocol_commit"] == os.environ["PROTOCOL_COMMIT"]
+          assert summary["pagination_amendment_commit"] == os.environ["PAGINATION_AMENDMENT_COMMIT"]
+          assert summary["pagination_mode"] == "gamma-markets-keyset-after_cursor"
           assert summary["code_commit"] == os.environ["GITHUB_SHA"]
           assert summary["selected_rows"] == len(rows)
           assert summary["selected_event_groups"] == len({row["event_id"] for row in rows})
