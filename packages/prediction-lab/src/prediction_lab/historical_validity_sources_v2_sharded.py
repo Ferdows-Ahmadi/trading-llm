@@ -222,7 +222,10 @@ def merge_shards(
     shard_directories = sorted(
         path
         for path in shards_root.iterdir()
-        if path.is_dir() and path.name.startswith("historical-validity-source-discovery-v0.2-shard-")
+        if path.is_dir()
+        and path.name.startswith(
+            "historical-validity-source-discovery-v0.2-shard-"
+        )
     )
     if len(shard_directories) != SHARD_COUNT:
         raise HistoricalSourceV2Error("Expected exactly four successful shard artifacts")
@@ -276,7 +279,9 @@ def merge_shards(
             raise HistoricalSourceV2Error("Common Crawl collection manifest differs across shards")
 
         rows = _load_jsonl(shard_directory / "source-lookups-v2.jsonl")
-        rows_by_id: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in expected_ids}
+        rows_by_id: dict[str, list[dict[str, Any]]] = {
+            question_id: [] for question_id in expected_ids
+        }
         seen_lookup_keys: set[tuple[object, object, object, object]] = set()
         for row in rows:
             question_id = str(row.get("question_id") or "")
@@ -353,7 +358,9 @@ def merge_shards(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Shard frozen historical-validity source discovery v2")
+    parser = argparse.ArgumentParser(
+        description="Shard frozen historical-validity source discovery v2"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     shard = subparsers.add_parser("shard")
