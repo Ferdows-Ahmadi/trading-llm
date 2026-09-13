@@ -1,6 +1,6 @@
 # Historical-validity source discovery v1
 
-Status: frozen before querying current Polymarket locator metadata or Wayback capture availability for the 64 fresh candidates.
+Status: frozen before querying current Polymarket locator metadata or Wayback capture availability for the 64 fresh candidates. The archive-provenance clarification below was committed before the first live source-discovery query.
 
 Parent protocol: `docs/experiments/development-historical-validity-v1-preregistration.md`, preregistration commit `c3a66d28d7126155935ccdd255034e7560dce6f0`.
 
@@ -42,7 +42,7 @@ Persist only locator/audit fields required to find historical or authoritative s
 - created/start/end/closed/update timestamps when supplied
 - event ID, event slug, event title, and event description when supplied
 
-Do **not** persist `outcomePrices`, live/final prices, volume, or other price-derived outcome fields in the source-discovery artifact. Current metadata cannot by itself satisfy the as-of contract-identity check.
+Do **not** persist current `outcomePrices`, live/final prices, volume, or other current price-derived outcome fields in the locator records. Current metadata cannot by itself satisfy the as-of contract-identity check.
 
 ## Frozen Wayback URL patterns
 
@@ -82,6 +82,8 @@ For each discovered `capture`, fetch the exact timestamped Wayback replay withou
 
 Historical capture bodies are frozen before any case-level adjudication begins.
 
+**Archive-provenance clarification:** a genuine pre-cutoff archived page/API response can naturally contain contemporaneous market-state fields, including the then-current probability. Such fields are historical source bytes, not the canonical benchmark outcome or the later-acquired benchmark `market_probability` column. They may remain inside the frozen raw replay solely so its provenance can be verified. Candidate selection and A/B/C historical-validity adjudication must not use those price fields. Current/post-resolution locator responses remain redacted as specified above. No archived replay content is model input during this audit stage.
+
 ## Contract-identity assistance
 
 The discovery stage may compute non-adjudicative diagnostics:
@@ -107,4 +109,4 @@ The artifact must contain all 64 candidates and all applicable URL-pattern looku
 - capture/replay identity and content hashes when available;
 - explicit error class/message when unavailable.
 
-No LLM inference, market probability, benchmark outcome, prior model score, or reserved-holdout data is permitted in this artifact.
+No LLM inference, canonical benchmark outcome, prior model score, or reserved-holdout data is permitted in this artifact. Canonical benchmark market probabilities are not loaded. Any contemporaneous market state present inside a frozen pre-cutoff archive replay is provenance-only and forbidden from candidate selection or historical-validity adjudication.
