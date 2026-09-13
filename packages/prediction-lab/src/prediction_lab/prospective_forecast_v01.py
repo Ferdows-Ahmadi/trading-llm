@@ -7,8 +7,9 @@ import hashlib
 import json
 import math
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from prediction_lab import prospective_evidence_v01 as evidence_contract
 from prediction_lab.research_forecaster import build_model_request
@@ -104,7 +105,10 @@ def _load_fixture(
         raise ResearchContractError("Evidence acquisition code commit changed")
     if summary.get("forecaster_protocol_commit") != FORECASTER_PROTOCOL_COMMIT:
         raise ResearchContractError("Evidence forecaster protocol identity changed")
-    if summary.get("rows") != CUSTODY_ROWS or summary.get("event_groups") != CUSTODY_EVENT_GROUPS:
+    if (
+        summary.get("rows") != CUSTODY_ROWS
+        or summary.get("event_groups") != CUSTODY_EVENT_GROUPS
+    ):
         raise ResearchContractError("Evidence cohort accounting changed")
     if summary.get("forecast_ready") is not True:
         raise ResearchContractError("Evidence artifact is not forecast-ready")
@@ -115,7 +119,10 @@ def _load_fixture(
     if summary.get("outcomes_accessed") is not False:
         raise ResearchContractError("Evidence artifact unexpectedly reports outcome access")
     statuses = summary.get("status_counts")
-    if not isinstance(statuses, dict) or sum(int(value) for value in statuses.values()) != CUSTODY_ROWS:
+    if (
+        not isinstance(statuses, dict)
+        or sum(int(value) for value in statuses.values()) != CUSTODY_ROWS
+    ):
         raise ResearchContractError("Evidence status accounting is malformed")
     if not set(statuses).issubset({"verified_complete", "verified_empty"}):
         raise ResearchContractError("Evidence artifact contains nonterminal acquisition states")
@@ -266,13 +273,18 @@ def forecast_row(
         if decision is None:
             raise ResearchContractError("Residual adapter did not bind a decision record")
         final_probability = output.get("final_probability")
-        if isinstance(final_probability, bool) or not isinstance(final_probability, (int, float)):
+        if isinstance(final_probability, bool) or not isinstance(
+            final_probability,
+            (int, float),
+        ):
             raise ResearchContractError("Residual adapter returned invalid final probability")
         final = float(final_probability)
         if decision.get("final_probability") != final:
             raise ResearchContractError("Residual decision diverges from forecast output")
         citations = output.get("cited_source_ids")
-        if not isinstance(citations, list) or not all(isinstance(value, str) for value in citations):
+        if not isinstance(citations, list) or not all(
+            isinstance(value, str) for value in citations
+        ):
             raise ResearchContractError("Residual adapter returned invalid citations")
         return {
             "question_id": packet.question_id,
@@ -320,7 +332,9 @@ def run_forecasts(
         expected_packets_sha256=expected_packets_sha256,
     )
     packets = _packets_from_fixture(fixture, rows)
-    adapter.metadata.assert_safe_for_historical_scoring(rows[0]["market_price_timestamp"])
+    adapter.metadata.assert_safe_for_historical_scoring(
+        rows[0]["market_price_timestamp"]
+    )
 
     if output_directory.exists():
         raise ResearchContractError("Refusing to replace existing forecast output")
@@ -352,9 +366,15 @@ def run_forecasts(
 
     forecasts_path = output_directory / "forecasts.jsonl"
     payload = b"".join(
-        (json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode(
-            "utf-8"
-        )
+        (
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
         for row in forecasts
     )
     forecasts_path.write_bytes(payload)
@@ -378,7 +398,10 @@ def run_forecasts(
         "zero_evidence_policy": "verified-empty-market-noop",
     }
     config_hash = content_hash(config)
-    _atomic_json(output_directory / "forecast-config.json", {**config, "config_hash": config_hash})
+    _atomic_json(
+        output_directory / "forecast-config.json",
+        {**config, "config_hash": config_hash},
+    )
 
     summary: dict[str, object] = {
         "schema_version": 1,
