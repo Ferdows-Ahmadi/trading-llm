@@ -1,5 +1,6 @@
 name: Prospective Development Custody v0.1
 
+# Pre-live retry after a floating-point boundary fix; selection rules are unchanged.
 on:
   push:
     branches:
