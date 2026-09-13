@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from prediction_lab import prospective_evidence_v01 as evidence_contract
 from prediction_lab import prospective_forecast_v01 as forecast
 from prediction_lab.research_types import (
