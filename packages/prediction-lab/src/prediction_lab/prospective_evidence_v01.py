@@ -7,15 +7,16 @@ import hashlib
 import json
 import zipfile
 from collections import Counter
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 import pandas as pd
 
-from prediction_lab.commoncrawl_evidence import CommonCrawlCapture, HistoricalEvidenceError
+from prediction_lab.commoncrawl_evidence import HistoricalEvidenceError
 from prediction_lab.gdelt_evidence import (
     FastCommonCrawlClient,
     GdeltArticle,
@@ -106,9 +107,14 @@ def _canonical_problem_text(row: Mapping[str, object]) -> str:
     )
 
 
-def _validate_custody_rows(rows: list[dict[str, Any]], summary: Mapping[str, object]) -> None:
+def _validate_custody_rows(
+    rows: list[dict[str, Any]],
+    summary: Mapping[str, object],
+) -> None:
     if len(rows) != CUSTODY_ROWS:
-        raise ResearchContractError(f"Expected {CUSTODY_ROWS} custody rows; found {len(rows)}")
+        raise ResearchContractError(
+            f"Expected {CUSTODY_ROWS} custody rows; found {len(rows)}"
+        )
     market_ids = [str(row.get("market_id") or "") for row in rows]
     if any(not value for value in market_ids) or len(set(market_ids)) != len(rows):
         raise ResearchContractError("Custody market IDs must be non-empty and unique")
@@ -130,11 +136,15 @@ def _validate_custody_rows(rows: list[dict[str, Any]], summary: Mapping[str, obj
         raise ResearchContractError("Custody does not authorize development forecasting")
     if summary.get("confirmatory_edge_claim_authorized") is not False:
         raise ResearchContractError("Custody confirmatory boundary changed")
+
     for row in rows:
         if str(row.get("source_cutoff_at") or "") != SOURCE_CUTOFF:
             raise ResearchContractError("Custody source cutoff changed")
         _canonical_problem_text(row)
-        forecast_at = _utc(row.get("market_price_timestamp"), field="market_price_timestamp")
+        forecast_at = _utc(
+            row.get("market_price_timestamp"),
+            field="market_price_timestamp",
+        )
         cutoff_at = _utc(row.get("source_cutoff_at"), field="source_cutoff_at")
         if cutoff_at > forecast_at:
             raise ResearchContractError("Custody source cutoff is after market price timestamp")
@@ -145,13 +155,17 @@ def _validate_custody_rows(rows: list[dict[str, Any]], summary: Mapping[str, obj
             raise ResearchContractError("Custody market probability is outside (0, 1)")
 
 
-def load_verified_custody_archive(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def load_verified_custody_archive(
+    path: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = path.read_bytes()
     actual_archive = _sha256_bytes(payload)
     if actual_archive != CUSTODY_ARCHIVE_SHA256:
         raise ResearchContractError(
-            f"Custody ZIP digest changed: actual={actual_archive}, expected={CUSTODY_ARCHIVE_SHA256}"
+            "Custody ZIP digest changed: "
+            f"actual={actual_archive}, expected={CUSTODY_ARCHIVE_SHA256}"
         )
+
     with zipfile.ZipFile(path) as archive:
         names = [item.filename for item in archive.infolist()]
         if len(names) != len(set(names)):
@@ -168,9 +182,12 @@ def load_verified_custody_archive(path: Path) -> tuple[list[dict[str, Any]], dic
                 for line in cohort_bytes.decode("utf-8").splitlines()
                 if line.strip()
             ]
-            summary = json.loads(archive.read("custody-summary.json").decode("utf-8"))
+            summary = json.loads(
+                archive.read("custody-summary.json").decode("utf-8")
+            )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ResearchContractError("Custody archive contains malformed JSON") from exc
+
     if not all(isinstance(row, dict) for row in rows) or not isinstance(summary, dict):
         raise ResearchContractError("Custody JSON has unexpected structure")
     typed_rows = [dict(row) for row in rows]
@@ -181,8 +198,8 @@ def load_verified_custody_archive(path: Path) -> tuple[list[dict[str, Any]], dic
 class CapturingGdeltDocClient(GdeltDocClient):
     """GDELT client that also freezes the provider JSON used for each search."""
 
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)  # type: ignore[arg-type]
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
         self.last_request_params: dict[str, str | int] | None = None
         self.last_payload: dict[str, Any] | None = None
 
@@ -250,7 +267,10 @@ def acquire_row(
     question_id = _question_id(row)
     question_text = str(row["question_text"])
     cutoff = _utc(row["source_cutoff_at"], field="source_cutoff_at")
-    forecast_at = _utc(row["market_price_timestamp"], field="market_price_timestamp")
+    forecast_at = _utc(
+        row["market_price_timestamp"],
+        field="market_price_timestamp",
+    )
     retrieved_at = datetime.now(UTC).isoformat()
     articles: list[GdeltArticle] = []
     provider_failures: list[str] = []
@@ -263,6 +283,7 @@ def acquire_row(
         discovery_query = build_gdelt_query(question_text)
     except HistoricalEvidenceError:
         deterministic_skips["no_discovery_query_terms"] += 1
+
     if discovery_query is not None:
         try:
             articles = discovery.search(
@@ -304,9 +325,12 @@ def acquire_row(
         except (HistoricalEvidenceError, httpx.HTTPError) as exc:
             attempt["status"] = "lookup_failure"
             attempt["error"] = f"{type(exc).__name__}: {exc}"
-            provider_failures.append(f"archive_lookup:{article.url}:{type(exc).__name__}:{exc}")
+            provider_failures.append(
+                f"archive_lookup:{article.url}:{type(exc).__name__}:{exc}"
+            )
             attempts.append(attempt)
             continue
+
         if capture is None:
             attempt["status"] = "no_eligible_capture"
             deterministic_skips["no_eligible_capture"] += 1
@@ -320,6 +344,7 @@ def acquire_row(
             continue
         if capture.timestamp > cutoff or article.seen_at > cutoff:
             raise ResearchContractError("Post-cutoff evidence escaped frozen admission rules")
+
         try:
             text, archived_title = archive.fetch_capture_text(
                 capture,
@@ -328,7 +353,9 @@ def acquire_row(
         except httpx.HTTPError as exc:
             attempt["status"] = "fetch_failure"
             attempt["error"] = f"{type(exc).__name__}: {exc}"
-            provider_failures.append(f"archive_fetch:{article.url}:{type(exc).__name__}:{exc}")
+            provider_failures.append(
+                f"archive_fetch:{article.url}:{type(exc).__name__}:{exc}"
+            )
             attempts.append(attempt)
             continue
         except HistoricalEvidenceError as exc:
@@ -340,7 +367,9 @@ def acquire_row(
                 continue
             attempt["status"] = "fetch_failure"
             attempt["error"] = f"{type(exc).__name__}: {exc}"
-            provider_failures.append(f"archive_fetch:{article.url}:{type(exc).__name__}:{exc}")
+            provider_failures.append(
+                f"archive_fetch:{article.url}:{type(exc).__name__}:{exc}"
+            )
             attempts.append(attempt)
             continue
 
@@ -411,7 +440,10 @@ def acquire_row(
     }
 
 
-def _load_checkpoint(path: Path, row: Mapping[str, object]) -> dict[str, object] | None:
+def _load_checkpoint(
+    path: Path,
+    row: Mapping[str, object],
+) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
@@ -460,9 +492,12 @@ def run_acquisition(
             try:
                 loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
-                raise ResearchContractError("Malformed pre-existing evidence checkpoint") from exc
+                raise ResearchContractError(
+                    "Malformed pre-existing evidence checkpoint"
+                ) from exc
             if isinstance(loaded, dict):
                 existing_raw = loaded
+
         reusable = _load_checkpoint(checkpoint, row)
         if reusable is not None:
             records.append(reusable)
@@ -511,8 +546,12 @@ def run_acquisition(
         packet = record.get("evidence_packet")
         if not isinstance(packet, dict):
             raise ResearchContractError("Evidence record lacks packet")
-        packet_lines.append(json.dumps(packet, ensure_ascii=False, sort_keys=True) + "\n")
-        audit_lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        packet_lines.append(
+            json.dumps(packet, ensure_ascii=False, sort_keys=True) + "\n"
+        )
+        audit_lines.append(
+            json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+        )
 
     fixture = {
         "schema_version": 2,
@@ -521,17 +560,25 @@ def run_acquisition(
     }
     fixture_path = output_directory / "evidence-fixture.json"
     fixture_bytes = (
-        json.dumps(fixture, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        json.dumps(
+            fixture,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
     ).encode("utf-8")
     fixture_path.write_bytes(fixture_bytes)
+
     packets_path = output_directory / "evidence-packets.jsonl"
     packets_path.write_text("".join(packet_lines), encoding="utf-8")
     audit_path = output_directory / "evidence-audit.jsonl"
     audit_path.write_text("".join(audit_lines), encoding="utf-8")
 
-    forecast_ready = set(status_counts).issubset({"verified_complete", "verified_empty"}) and sum(
-        status_counts.values()
-    ) == CUSTODY_ROWS
+    forecast_ready = (
+        set(status_counts).issubset({"verified_complete", "verified_empty"})
+        and sum(status_counts.values()) == CUSTODY_ROWS
+    )
     summary: dict[str, object] = {
         "schema_version": 1,
         "method_version": METHOD_VERSION,
@@ -597,6 +644,7 @@ def main() -> None:
             discovery=discovery,
             archive=archive,
         )
+
     safe = {
         key: summary[key]
         for key in (
