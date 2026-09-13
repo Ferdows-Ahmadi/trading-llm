@@ -28,7 +28,6 @@ from prediction_lab.commoncrawl_evidence import (
     _utc_timestamp,
 )
 from prediction_lab.historical_validity_sources import (
-    HistoricalSourceError,
     SourceTransportError,
     WaybackAuditCdxClient,
 )
@@ -143,7 +142,11 @@ def _recursive_keys(value: object) -> set[str]:
     return set()
 
 
-def load_v1_locators(path: Path, *, expected_rows: int = CANDIDATE_ROWS) -> dict[str, dict[str, Any]]:
+def load_v1_locators(
+    path: Path,
+    *,
+    expected_rows: int = CANDIDATE_ROWS,
+) -> dict[str, dict[str, Any]]:
     rows = _load_jsonl(path)
     if len(rows) != expected_rows:
         raise HistoricalSourceV2Error("V1 locator ledger row count changed")
@@ -152,13 +155,18 @@ def load_v1_locators(path: Path, *, expected_rows: int = CANDIDATE_ROWS) -> dict
         question_id = str(row.get("question_id") or "").strip()
         if not question_id or question_id in by_question:
             raise HistoricalSourceV2Error("V1 locator ledger IDs are missing or duplicated")
-        if row.get("locator_status") != "success" or not isinstance(row.get("locator"), dict):
-            raise HistoricalSourceV2Error("V2 requires a successful frozen V1 locator per candidate")
+        if row.get("locator_status") != "success" or not isinstance(
+            row.get("locator"), dict
+        ):
+            raise HistoricalSourceV2Error(
+                "V2 requires a successful frozen V1 locator per candidate"
+            )
         locator = row["locator"]
         leaked = _FORBIDDEN_LOCATOR_KEYS & _recursive_keys(locator)
         if leaked:
             raise HistoricalSourceV2Error(
-                "V1 locator contains forbidden price/outcome metadata: " + ", ".join(sorted(leaked))
+                "V1 locator contains forbidden price/outcome metadata: "
+                + ", ".join(sorted(leaked))
             )
         by_question[question_id] = row
     return by_question
@@ -478,9 +486,7 @@ def _freeze_content(
         text_path.write_text(text, encoding="utf-8")
     diagnostic["text_sha256"] = text_sha
     diagnostic["text_chars"] = len(text)
-    diagnostic["benchmark_question_exact_match"] = (
-        benchmark_normalized in _normalize_text(text)
-    )
+    diagnostic["benchmark_question_exact_match"] = benchmark_normalized in _normalize_text(text)
     return diagnostic
 
 
@@ -576,7 +582,11 @@ def discover_v2_sources(
                                 text_directory=text_directory,
                             )
                             record["lookup_status"] = "capture"
-                        except (ResearchContractError, HistoricalEvidenceError, httpx.HTTPError) as exc:
+                        except (
+                            ResearchContractError,
+                            HistoricalEvidenceError,
+                            httpx.HTTPError,
+                        ) as exc:
                             record["lookup_status"] = "content_failure"
                             record["error"] = f"{type(exc).__name__}: {exc}"
                 except (
@@ -640,7 +650,9 @@ def discover_v2_sources(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Expand frozen historical-validity source discovery")
+    parser = argparse.ArgumentParser(
+        description="Expand frozen historical-validity source discovery"
+    )
     parser.add_argument("candidates_csv", type=Path)
     parser.add_argument("v1_locators_jsonl", type=Path)
     parser.add_argument("output_directory", type=Path)
