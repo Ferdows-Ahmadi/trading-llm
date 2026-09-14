@@ -5,8 +5,24 @@ Snapshot date: 2026-09-14
 ## Current phase
 
 ```text
-Stage 0 complete enough to collaborate
-Stage 1 started: timezone-safe session engine
+Stage 0: collaboration/research boundaries — implemented
+Stage 1: timezone-safe session + Opening Range reconstruction — implemented
+Stage 2: external A/C level provider contract — next
+```
+
+## Current branch / PR
+
+```text
+branch: research/market-strategy-lab-v0.1
+PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
+```
+
+Latest verified Market Strategy Lab CI at this snapshot:
+
+```text
+run: 34874704250
+result: success
+checks: pytest + Ruff + mypy
 ```
 
 ## Module status
@@ -19,10 +35,14 @@ Stage 1 started: timezone-safe session engine
 | Unresolved-rule register | Implemented |
 | Experiment roadmap | Implemented |
 | Strategy package scaffold | Implemented |
+| Dedicated CI | Green |
 | Session definitions | Implemented |
 | Timezone/DST conversion | Implemented |
 | 40-minute OR window timing | Implemented |
-| OR high/low from candles | Not started |
+| Timezone-aware M1 candle model | Implemented |
+| OR high/low from candles | Implemented |
+| Missing/duplicate OR candle rejection | Implemented |
+| Future/outside-OR candle exclusion | Tested |
 | External A/C level provider | Not started |
 | Previous-trend provider/algorithm | Not started |
 | M15/M5 direction contract | Not started |
@@ -44,11 +64,11 @@ Stage 1 started: timezone-safe session engine
 
 ## Immediate engineering frontier
 
-1. Keep CI green for the new package.
-2. Implement chronological candle models and Opening Range high/low reconstruction.
-3. Add tests proving OR computation uses only candles inside the 40-minute window.
-4. Define the external A/C level provider contract without inventing the formula.
-5. Begin an auditable session decision ledger.
+1. Define the external A/C level snapshot/provider contract without inventing the formulas.
+2. Bind supplied A/C levels to an internally reconstructed OR with temporal validation.
+3. Start the auditable decision ledger/state-machine model.
+4. Define previous-trend and M15/M5 direction provider boundaries so human annotations can be used before algorithms are frozen.
+5. Begin the annotated validation-corpus format for examples from the trader/course.
 
 ## Research inputs still needed later
 
