@@ -12,7 +12,8 @@ Stage 3: previous-trend + M15/M5 directional context contract — implemented
 Stage 4: auditable setup state machine / decision ledger — implemented
 Stage 5: structural stop + target + R:R trade-plan contract — implemented
 Stage 6: validation corpus format — implemented; corpus population pending
-Stage 7: chronological historical replay infrastructure — next
+Stage 7a: no-lookahead M1 -> M5/M15 replay primitives — implemented
+Stage 7b: full historical replay + realistic cost model — next
 ```
 
 ## Current branch / PR
@@ -25,7 +26,7 @@ PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
 Latest verified Market Strategy Lab CI at this snapshot:
 
 ```text
-run: 34877055710
+run: 34877267941
 result: success
 checks: pytest + Ruff + mypy
 ```
@@ -60,14 +61,26 @@ checks: pytest + Ruff + mypy
 | Decision ledger | Implemented, versioned, append-only/immutable |
 | Accepted-state trade-plan requirement | Implemented |
 | Validation corpus | Machine-readable format/schema implemented; examples pending |
-| Historical replay | Not started |
-| M5/M15 no-lookahead resampling | Not started |
+| M1 chronological visibility | Implemented |
+| M5/M15 no-lookahead resampling | Implemented with explicit grid anchor |
+| Incomplete/duplicate higher-timeframe source rejection | Implemented |
+| Full historical replay orchestrator | Not started |
 | Cost model | Not started |
 | Backtest | Not started |
 | Walk-forward evaluation | Not started |
 | Paper trading | Not started |
 | LLM augmentation experiment | Deferred |
 | Live execution | Not authorized |
+
+## Replay safety now enforced
+
+- M1 candles are visible only after the one-minute candle has closed;
+- future M1 candles cannot change a prior replay snapshot;
+- M5/M15 bars are emitted only after the entire higher-timeframe bar has closed;
+- duplicate visible M1 timestamps are rejected;
+- a partially missing closed higher-timeframe bucket is rejected instead of silently reconstructed;
+- callers must supply the higher-timeframe grid anchor explicitly, so broker/session alignment is not guessed;
+- OHLC is reconstructed from exact constituents and aggregate volume becomes unknown when source volume is incomplete.
 
 ## Trade-plan safety now enforced
 
@@ -78,22 +91,15 @@ checks: pytest + Ruff + mypy
 - R:R below 1:2 is rejected rather than repaired by moving the stop;
 - exactly 1:2 maps to full exit at target;
 - above 1:2 maps to partial exit at 2R while partial percentage and remainder exit remain explicitly unresolved;
-- an `ACCEPTED` setup state cannot exist without a causally valid accepted trade plan meeting the 1:2 minimum;
-- duplicate entry/stop/target/R:R fields cannot conflict with the validated trade plan.
-
-## Validation-corpus boundary
-
-The canonical fidelity corpus has a documented JSON schema and example template. It records source provenance, OR/ACD values, trend/context labels, boundary, momentum, confirmation, intended entry/invalidation/target, take/skip/unresolved decision, explanation and unresolved fields.
-
-Realized outcomes and later P/L are deliberately excluded from fidelity annotations so implementation matching is not confused with profit optimization.
+- an `ACCEPTED` setup state cannot exist without a causally valid accepted trade plan meeting the 1:2 minimum.
 
 ## Immediate engineering frontier
 
-1. Build chronological replay primitives around M1 candles.
-2. Derive completed M5/M15 candles without future leakage.
-3. Define explicit decision timestamps so only fully closed higher-timeframe candles are visible.
-4. Connect session/OR, A/C provider, context provider and trade-plan provider into replay snapshots while unresolved momentum/confirmation rules remain externally supplied.
-5. Add a realistic cost model before profitability claims or full backtests.
+1. Add an explicit cost model for spread, commission and conservative slippage without hard-coding one broker.
+2. Build a chronological replay orchestrator that emits decision snapshots at known timestamps.
+3. Connect session/OR, A/C provider, directional context, candidate-state ledger and trade-plan provider in replay.
+4. Keep momentum and exact confirmation logic provider/annotation-supplied until the trader definitions are sufficiently precise.
+5. Populate the validation corpus with real annotated examples before treating strategy fidelity as proven.
 
 ## Research inputs still needed later
 
