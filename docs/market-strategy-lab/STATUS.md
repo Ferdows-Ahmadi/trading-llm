@@ -14,7 +14,8 @@ Stage 5: structural stop + target + R:R trade-plan contract — implemented
 Stage 6: validation corpus format — implemented; corpus population pending
 Stage 7a: no-lookahead M1 -> M5/M15 replay primitives — implemented
 Stage 7b: broker-agnostic execution cost model — implemented
-Stage 7c: full chronological replay orchestrator — next
+Stage 7c: chronological replay snapshot orchestrator — implemented
+Stage 8: boundary/confirmation integration + first historical experiment — next
 ```
 
 ## Current branch / PR
@@ -27,10 +28,12 @@ PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
 Latest verified Market Strategy Lab CI at this snapshot:
 
 ```text
-run: 34877480153
+run: 34877841775
 result: success
 checks: pytest + Ruff + mypy
 ```
+
+The latest replay build ran 78 tests successfully before lint/type checks also passed.
 
 ## Module status
 
@@ -67,22 +70,23 @@ checks: pytest + Ruff + mypy
 | Incomplete/duplicate higher-timeframe source rejection | Implemented |
 | Execution cost assumptions | Versioned, broker-agnostic model implemented |
 | Spread/slippage/commission P&L adjustment | Implemented for BUY and SELL |
-| Full historical replay orchestrator | Not started |
-| Backtest | Not started |
+| Replay phase model | Implemented: pre-session / OR-forming / post-OR |
+| Replay snapshot orchestration | Implemented |
+| Future provider snapshot isolation | Tested |
+| Full strategy backtest | Not authorized yet; unresolved strategy rules remain |
 | Walk-forward evaluation | Not started |
 | Paper trading | Not started |
 | LLM augmentation experiment | Deferred |
 | Live execution | Not authorized |
 
-## Replay safety now enforced
+## Replay orchestration now guarantees
 
-- M1 candles are visible only after the one-minute candle has closed;
+- pre-session and OR-forming snapshots cannot expose the final Opening Range;
 - future M1 candles cannot change a prior replay snapshot;
-- M5/M15 bars are emitted only after the entire higher-timeframe bar has closed;
-- duplicate visible M1 timestamps are rejected;
-- a partially missing closed higher-timeframe bucket is rejected instead of silently reconstructed;
-- callers must supply the higher-timeframe grid anchor explicitly, so broker/session alignment is not guessed;
-- OHLC is reconstructed from exact constituents and aggregate volume becomes unknown when source volume is incomplete.
+- future provider snapshots are ignored before the strategy is allowed to consume them;
+- post-OR snapshots reconstruct the exact OR and then bind only causally available A/C levels, directional context and structural trade plans;
+- M5 and M15 inputs remain closed-bar-only and use explicit caller-provided grid anchors;
+- optional unresolved providers stay absent rather than being replaced with invented values.
 
 ## Cost-model boundary
 
@@ -96,11 +100,11 @@ checks: pytest + Ruff + mypy
 
 ## Immediate engineering frontier
 
-1. Build a chronological replay orchestrator that emits decision snapshots at known timestamps.
-2. Connect session/OR, A/C provider, directional context, candidate-state ledger and trade-plan provider in replay.
-3. Keep momentum and exact confirmation logic provider/annotation-supplied until the trader definitions are sufficiently precise.
-4. Populate the validation corpus with real annotated examples before treating strategy fidelity as proven.
-5. Define a concrete historical data source/instrument/session experiment before running profitability statistics.
+1. Detect deterministic A/C boundary-touch events from visible post-OR M1 candles.
+2. Add timestamped provider/annotation contracts for unresolved momentum and exact confirmation judgments.
+3. Connect those events into the existing setup-state ledger without letting future candles rewrite earlier states.
+4. Populate the validation corpus with real trader/course examples before claiming fidelity.
+5. Freeze the first concrete historical experiment: instrument, data source, date range, session, bar alignment, cost profile, development/evaluation split.
 
 ## Research inputs still needed later
 
