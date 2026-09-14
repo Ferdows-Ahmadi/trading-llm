@@ -7,7 +7,8 @@ Snapshot date: 2026-09-14
 ```text
 Stage 0: collaboration/research boundaries — implemented
 Stage 1: timezone-safe session + Opening Range reconstruction — implemented
-Stage 2: external A/C level provider contract — next
+Stage 2: external A/C level provider contract — implemented
+Stage 3: previous-trend / directional-context boundary — next
 ```
 
 ## Current branch / PR
@@ -20,7 +21,7 @@ PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
 Latest verified Market Strategy Lab CI at this snapshot:
 
 ```text
-run: 34874704250
+run: 34874865207
 result: success
 checks: pytest + Ruff + mypy
 ```
@@ -43,7 +44,11 @@ checks: pytest + Ruff + mypy
 | OR high/low from candles | Implemented |
 | Missing/duplicate OR candle rejection | Implemented |
 | Future/outside-OR candle exclusion | Tested |
-| External A/C level provider | Not started |
+| External A/C level snapshot model | Implemented |
+| External A/C provider interface | Implemented |
+| A/C source/version identity | Implemented |
+| A/C temporal anti-lookahead checks | Implemented |
+| A/C-to-OR ordering validation | Implemented |
 | Previous-trend provider/algorithm | Not started |
 | M15/M5 direction contract | Not started |
 | M1 setup state machine | Not started |
@@ -64,11 +69,11 @@ checks: pytest + Ruff + mypy
 
 ## Immediate engineering frontier
 
-1. Define the external A/C level snapshot/provider contract without inventing the formulas.
-2. Bind supplied A/C levels to an internally reconstructed OR with temporal validation.
-3. Start the auditable decision ledger/state-machine model.
-4. Define previous-trend and M15/M5 direction provider boundaries so human annotations can be used before algorithms are frozen.
-5. Begin the annotated validation-corpus format for examples from the trader/course.
+1. Define previous-trend and M15/M5 directional-context provider boundaries so trader annotations can be consumed before any swing algorithm or ACD4 formula is treated as canonical.
+2. Start the auditable decision ledger/state-machine model.
+3. Define the annotated validation-corpus format for examples from the trader/course.
+4. Add a conservative trend-aligned baseline path while leaving countertrend permission unresolved.
+5. Preserve all unknown momentum/confirmation/stop-selection definitions as explicit unresolved states until sourced.
 
 ## Research inputs still needed later
 
