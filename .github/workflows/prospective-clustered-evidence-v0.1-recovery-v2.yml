@@ -6,6 +6,8 @@ on:
       - research/prediction-market-lab-v0.1
     paths:
       - .github/workflows/prospective-clustered-evidence-v0.1-recovery-v2.yml
+      - packages/prediction-lab/src/prediction_lab/prospective_evidence_recovery_v02.py
+      - packages/prediction-lab/tests/test_prospective_evidence_recovery_v02.py
   workflow_dispatch:
 
 permissions:
