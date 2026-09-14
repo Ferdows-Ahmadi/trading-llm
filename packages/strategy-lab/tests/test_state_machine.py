@@ -1,8 +1,9 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from strategy_lab.core.models import MomentumClass, SessionKind, TrendDirection
+from strategy_lab.core.sessions import build_session_window
 from strategy_lab.core.state_machine import (
     AcdBoundary,
     AcdDecisionLedger,
@@ -11,6 +12,12 @@ from strategy_lab.core.state_machine import (
     SetupSnapshot,
     SetupState,
     SetupStateError,
+)
+from strategy_lab.core.trade_plan import (
+    ExternalTradePlanSnapshot,
+    TradeSide,
+    ValidatedTradePlan,
+    bind_trade_plan,
 )
 
 SESSION_OPEN = datetime(2026, 9, 14, 13, 30, tzinfo=UTC)
@@ -23,6 +30,28 @@ def _start() -> AcdDecisionLedger:
         session_open_at=SESSION_OPEN,
         started_at=SESSION_OPEN - timedelta(minutes=1),
     )
+
+
+def _accepted_trade_plan() -> ValidatedTradePlan:
+    window = build_session_window(
+        SessionKind.AMERICA_NEW_YORK,
+        date(2026, 9, 14),
+        display_timezone="UTC",
+    )
+    available_at = SESSION_OPEN + timedelta(minutes=42)
+    snapshot = ExternalTradePlanSnapshot(
+        session=SessionKind.AMERICA_NEW_YORK,
+        session_open_at=SESSION_OPEN,
+        observed_through=available_at,
+        available_at=available_at,
+        side=TradeSide.BUY,
+        entry_price=100.0,
+        structural_invalidation_price=95.0,
+        target_price=110.0,
+        source="trader_annotation",
+        source_version="v1",
+    )
+    return bind_trade_plan(snapshot, window=window, decision_at=available_at)
 
 
 def _to_boundary() -> AcdDecisionLedger:
@@ -49,9 +78,8 @@ def _to_boundary() -> AcdDecisionLedger:
     )
 
 
-def test_full_setup_path_is_auditable_and_immutable() -> None:
-    boundary_ledger = _to_boundary()
-    waiting = boundary_ledger.transition(
+def _candidate() -> AcdDecisionLedger:
+    waiting = _to_boundary().transition(
         SetupSnapshot(
             at=SESSION_OPEN + timedelta(minutes=41),
             state=SetupState.WAITING_FOR_CONFIRMATION,
@@ -63,7 +91,7 @@ def test_full_setup_path_is_auditable_and_immutable() -> None:
             confirmation_mode=ConfirmationMode.ONE_CANDLE,
         )
     )
-    candidate = waiting.transition(
+    return waiting.transition(
         SetupSnapshot(
             at=SESSION_OPEN + timedelta(minutes=42),
             state=SetupState.CANDIDATE_READY,
@@ -76,6 +104,12 @@ def test_full_setup_path_is_auditable_and_immutable() -> None:
             confirmation_result=ConfirmationResult.CONFIRMED,
         )
     )
+
+
+def test_full_setup_path_is_auditable_and_immutable() -> None:
+    boundary_ledger = _to_boundary()
+    candidate = _candidate()
+    trade_plan = _accepted_trade_plan()
     accepted = candidate.transition(
         SetupSnapshot(
             at=SESSION_OPEN + timedelta(minutes=42),
@@ -87,7 +121,8 @@ def test_full_setup_path_is_auditable_and_immutable() -> None:
             momentum=MomentumClass.NORMAL_OR_WEAK,
             confirmation_mode=ConfirmationMode.ONE_CANDLE,
             confirmation_result=ConfirmationResult.CONFIRMED,
-            reason="all currently formalized setup gates passed",
+            trade_plan=trade_plan,
+            reason="confirmed setup has a causally valid trade plan at 1:2",
         )
     )
 
@@ -96,6 +131,40 @@ def test_full_setup_path_is_auditable_and_immutable() -> None:
     assert accepted.is_terminal is True
     assert len(boundary_ledger.entries) == 5
     assert len(accepted.entries) == 8
+
+
+def test_accepted_setup_requires_validated_trade_plan() -> None:
+    with pytest.raises(SetupStateError, match="requires a validated trade plan"):
+        SetupSnapshot(
+            at=SESSION_OPEN + timedelta(minutes=42),
+            state=SetupState.ACCEPTED,
+            previous_trend=TrendDirection.BULLISH,
+            m15_direction=TrendDirection.BULLISH,
+            m5_direction=TrendDirection.BULLISH,
+            boundary=AcdBoundary.A_DOWN,
+            momentum=MomentumClass.NORMAL_OR_WEAK,
+            confirmation_mode=ConfirmationMode.ONE_CANDLE,
+            confirmation_result=ConfirmationResult.CONFIRMED,
+            reason="missing plan should fail",
+        )
+
+
+def test_trade_plan_values_cannot_conflict_with_snapshot() -> None:
+    with pytest.raises(SetupStateError, match="entry_price conflicts"):
+        SetupSnapshot(
+            at=SESSION_OPEN + timedelta(minutes=42),
+            state=SetupState.ACCEPTED,
+            previous_trend=TrendDirection.BULLISH,
+            m15_direction=TrendDirection.BULLISH,
+            m5_direction=TrendDirection.BULLISH,
+            boundary=AcdBoundary.A_DOWN,
+            momentum=MomentumClass.NORMAL_OR_WEAK,
+            confirmation_mode=ConfirmationMode.ONE_CANDLE,
+            confirmation_result=ConfirmationResult.CONFIRMED,
+            entry_price=101.0,
+            trade_plan=_accepted_trade_plan(),
+            reason="conflicting duplicate data should fail",
+        )
 
 
 def test_invalid_transition_is_rejected() -> None:
@@ -159,6 +228,33 @@ def test_candidate_ready_requires_resolved_momentum_and_confirmation() -> None:
             confirmation_mode=ConfirmationMode.ONE_CANDLE,
             confirmation_result=ConfirmationResult.CONFIRMED,
         )
+
+
+def test_accepted_serialization_uses_trade_plan_values() -> None:
+    accepted = _candidate().transition(
+        SetupSnapshot(
+            at=SESSION_OPEN + timedelta(minutes=42),
+            state=SetupState.ACCEPTED,
+            previous_trend=TrendDirection.BULLISH,
+            m15_direction=TrendDirection.BULLISH,
+            m5_direction=TrendDirection.BULLISH,
+            boundary=AcdBoundary.A_DOWN,
+            momentum=MomentumClass.NORMAL_OR_WEAK,
+            confirmation_mode=ConfirmationMode.ONE_CANDLE,
+            confirmation_result=ConfirmationResult.CONFIRMED,
+            trade_plan=_accepted_trade_plan(),
+            reason="valid plan",
+        )
+    )
+    payload = accepted.to_dict()
+    entries = payload["entries"]
+    assert isinstance(entries, list)
+    terminal = entries[-1]
+    assert terminal["entry_price"] == 100.0
+    assert terminal["stop_price"] == 95.0
+    assert terminal["target_price"] == 110.0
+    assert terminal["risk_reward"]["ratio"] == 2.0
+    assert terminal["trade_plan"]["source"] == "trader_annotation@v1"
 
 
 def test_serialization_is_versioned_and_uses_utc() -> None:
