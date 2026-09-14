@@ -13,7 +13,8 @@ Stage 4: auditable setup state machine / decision ledger — implemented
 Stage 5: structural stop + target + R:R trade-plan contract — implemented
 Stage 6: validation corpus format — implemented; corpus population pending
 Stage 7a: no-lookahead M1 -> M5/M15 replay primitives — implemented
-Stage 7b: full historical replay + realistic cost model — next
+Stage 7b: broker-agnostic execution cost model — implemented
+Stage 7c: full chronological replay orchestrator — next
 ```
 
 ## Current branch / PR
@@ -26,7 +27,7 @@ PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
 Latest verified Market Strategy Lab CI at this snapshot:
 
 ```text
-run: 34877267941
+run: 34877480153
 result: success
 checks: pytest + Ruff + mypy
 ```
@@ -64,8 +65,9 @@ checks: pytest + Ruff + mypy
 | M1 chronological visibility | Implemented |
 | M5/M15 no-lookahead resampling | Implemented with explicit grid anchor |
 | Incomplete/duplicate higher-timeframe source rejection | Implemented |
+| Execution cost assumptions | Versioned, broker-agnostic model implemented |
+| Spread/slippage/commission P&L adjustment | Implemented for BUY and SELL |
 | Full historical replay orchestrator | Not started |
-| Cost model | Not started |
 | Backtest | Not started |
 | Walk-forward evaluation | Not started |
 | Paper trading | Not started |
@@ -82,24 +84,23 @@ checks: pytest + Ruff + mypy
 - callers must supply the higher-timeframe grid anchor explicitly, so broker/session alignment is not guessed;
 - OHLC is reconstructed from exact constituents and aggregate volume becomes unknown when source volume is incomplete.
 
-## Trade-plan safety now enforced
+## Cost-model boundary
 
-- provider-supplied stop/target values carry source/version and observation/availability timestamps;
-- BUY geometry must satisfy structural stop < entry < target;
-- SELL geometry must satisfy target < entry < structural stop;
-- future or wrong-session trade plans are rejected;
-- R:R below 1:2 is rejected rather than repaired by moving the stop;
-- exactly 1:2 maps to full exit at target;
-- above 1:2 maps to partial exit at 2R while partial percentage and remainder exit remain explicitly unresolved;
-- an `ACCEPTED` setup state cannot exist without a causally valid accepted trade plan meeting the 1:2 minimum.
+- spread is an explicit full bid/ask spread assumption in basis points;
+- entry and exit slippage are explicit adverse basis-point assumptions;
+- commission is explicit per side;
+- BUY and SELL receive directionally correct adverse execution prices;
+- gross P/L, execution-price cost, commission cost, total cost and net P/L are all retained;
+- assumptions carry a profile/version/source identity;
+- the code intentionally contains no claim about which numerical cost assumptions are realistic for any broker or instrument.
 
 ## Immediate engineering frontier
 
-1. Add an explicit cost model for spread, commission and conservative slippage without hard-coding one broker.
-2. Build a chronological replay orchestrator that emits decision snapshots at known timestamps.
-3. Connect session/OR, A/C provider, directional context, candidate-state ledger and trade-plan provider in replay.
-4. Keep momentum and exact confirmation logic provider/annotation-supplied until the trader definitions are sufficiently precise.
-5. Populate the validation corpus with real annotated examples before treating strategy fidelity as proven.
+1. Build a chronological replay orchestrator that emits decision snapshots at known timestamps.
+2. Connect session/OR, A/C provider, directional context, candidate-state ledger and trade-plan provider in replay.
+3. Keep momentum and exact confirmation logic provider/annotation-supplied until the trader definitions are sufficiently precise.
+4. Populate the validation corpus with real annotated examples before treating strategy fidelity as proven.
+5. Define a concrete historical data source/instrument/session experiment before running profitability statistics.
 
 ## Research inputs still needed later
 
