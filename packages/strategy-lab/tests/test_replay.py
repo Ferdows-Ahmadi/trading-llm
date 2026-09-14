@@ -6,7 +6,7 @@ from strategy_lab.core.models import SessionKind, TrendDirection
 from strategy_lab.core.opening_range import Candle
 from strategy_lab.core.replay import ReplayPhase, build_acd_replay_snapshot
 from strategy_lab.core.sessions import build_session_window
-from strategy_lab.core.trade_plan import ExternalTradePlanSnapshot, TradeSide, TradePlanStatus
+from strategy_lab.core.trade_plan import ExternalTradePlanSnapshot, TradePlanStatus, TradeSide
 
 SESSION_DATE = date(2026, 9, 14)
 SESSION = SessionKind.AMERICA_NEW_YORK
