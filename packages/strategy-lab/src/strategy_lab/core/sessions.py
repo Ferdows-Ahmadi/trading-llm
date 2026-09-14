@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from .models import SessionKind
@@ -71,8 +71,8 @@ def build_session_window(
     )
     local_or_end = local_open + OPENING_RANGE_DURATION
 
-    open_utc = local_open.astimezone(timezone.utc)
-    or_end_utc = local_or_end.astimezone(timezone.utc)
+    open_utc = local_open.astimezone(UTC)
+    or_end_utc = local_or_end.astimezone(UTC)
 
     return SessionWindow(
         session=session,
