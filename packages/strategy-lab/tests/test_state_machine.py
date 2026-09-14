@@ -109,13 +109,13 @@ def test_invalid_transition_is_rejected() -> None:
 
 def test_backward_timestamp_is_rejected() -> None:
     ledger = _start().transition(
-        SetupSnapshot(at=SESSION_OPEN, state=SetupState.OR_FORMING)
+        SetupSnapshot(at=SESSION_OPEN + timedelta(minutes=1), state=SetupState.OR_FORMING)
     )
 
     with pytest.raises(SetupStateError, match="timestamps must be non-decreasing"):
         ledger.transition(
             SetupSnapshot(
-                at=SESSION_OPEN - timedelta(seconds=1),
+                at=SESSION_OPEN + timedelta(seconds=30),
                 state=SetupState.OR_READY,
             )
         )
