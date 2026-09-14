@@ -7,10 +7,10 @@ rules. Missing optional providers remain missing in the replay snapshot.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
-from collections.abc import Iterable
 
 from .context import (
     AcdDirectionalContext,
