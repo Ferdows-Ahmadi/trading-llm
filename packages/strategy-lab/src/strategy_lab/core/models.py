@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import pairwise
 
 
 class SessionKind(StrEnum):
@@ -40,7 +41,7 @@ class MomentumClass(StrEnum):
 
 
 class DecisionStatus(StrEnum):
-    """Terminal or non-terminal research decision state."""
+    """Terminal research decision state."""
 
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -72,7 +73,7 @@ class AcdLevels:
             self.a_down,
             self.c_down,
         )
-        if not all(left > right for left, right in zip(ordered, ordered[1:], strict=True)):
+        if not all(left > right for left, right in pairwise(ordered)):
             raise ValueError(
                 "ACD levels must satisfy C_UP > A_UP > OR_UP > OR_DOWN > A_DOWN > C_DOWN"
             )
