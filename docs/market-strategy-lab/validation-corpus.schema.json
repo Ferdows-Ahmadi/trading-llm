@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/trading-llm/acd-validation-example-v0.1.schema.json",
+  "title": "ACD Fast Scalp v0.1 validation example",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "strategy_version",
+    "example_id",
+    "instrument",
+    "session",
+    "session_date",
+    "source",
+    "opening_range",
+    "acd_levels",
+    "previous_trend",
+    "m15_direction",
+    "m5_direction",
+    "boundary",
+    "momentum",
+    "confirmation",
+    "entry_price",
+    "structural_invalidation_price",
+    "target_price",
+    "decision",
+    "explanation",
+    "unresolved_fields"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "acd-validation-example-v0.1"
+    },
+    "strategy_version": {
+      "const": "acd-fast-scalp-v0.1"
+    },
+    "example_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instrument": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "enum": ["asia_singapore", "europe_london", "america_new_york"]
+    },
+    "session_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference", "annotator", "annotated_at"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "annotator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "annotated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "opening_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["starts_at", "ends_at", "high", "low"],
+      "properties": {
+        "starts_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "high": {
+          "type": ["number", "null"]
+        },
+        "low": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "acd_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "a_up",
+        "c_up",
+        "a_down",
+        "c_down",
+        "source",
+        "source_version"
+      ],
+      "properties": {
+        "a_up": {
+          "type": ["number", "null"]
+        },
+        "c_up": {
+          "type": ["number", "null"]
+        },
+        "a_down": {
+          "type": ["number", "null"]
+        },
+        "c_down": {
+          "type": ["number", "null"]
+        },
+        "source": {
+          "type": ["string", "null"]
+        },
+        "source_version": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "previous_trend": {
+      "$ref": "#/$defs/trend"
+    },
+    "m15_direction": {
+      "$ref": "#/$defs/trend"
+    },
+    "m5_direction": {
+      "$ref": "#/$defs/trend"
+    },
+    "boundary": {
+      "type": ["string", "null"],
+      "enum": ["a_up", "c_up", "a_down", "c_down", null]
+    },
+    "momentum": {
+      "enum": ["normal_or_weak", "strong_opposing", "unresolved"]
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "result", "candle_starts"],
+      "properties": {
+        "mode": {
+          "enum": ["one_candle", "three_candle", "unresolved"]
+        },
+        "result": {
+          "enum": ["not_evaluated", "confirmed", "failed", "unresolved"]
+        },
+        "candle_starts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "entry_price": {
+      "type": ["number", "null"]
+    },
+    "structural_invalidation_price": {
+      "type": ["number", "null"]
+    },
+    "target_price": {
+      "type": ["number", "null"]
+    },
+    "decision": {
+      "enum": ["take", "skip", "unresolved"]
+    },
+    "explanation": {
+      "type": "string"
+    },
+    "unresolved_fields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "chart_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "default": []
+    }
+  },
+  "$defs": {
+    "trend": {
+      "enum": ["bullish", "bearish", "unclear", "unresolved"]
+    }
+  }
+}

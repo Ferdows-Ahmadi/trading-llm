@@ -1,0 +1,51 @@
+{
+  "schema_version": "acd-validation-example-v0.1",
+  "strategy_version": "acd-fast-scalp-v0.1",
+  "example_id": "replace-me",
+  "instrument": "XAUUSD",
+  "session": "america_new_york",
+  "session_date": "2026-09-14",
+  "source": {
+    "kind": "trader_annotation",
+    "reference": "replace-with-chart-or-note-reference",
+    "annotator": "replace-with-source-identity",
+    "annotated_at": "2026-09-14T00:00:00+00:00"
+  },
+  "opening_range": {
+    "starts_at": null,
+    "ends_at": null,
+    "high": null,
+    "low": null
+  },
+  "acd_levels": {
+    "a_up": null,
+    "c_up": null,
+    "a_down": null,
+    "c_down": null,
+    "source": null,
+    "source_version": null
+  },
+  "previous_trend": "unresolved",
+  "m15_direction": "unresolved",
+  "m5_direction": "unresolved",
+  "boundary": null,
+  "momentum": "unresolved",
+  "confirmation": {
+    "mode": "unresolved",
+    "result": "unresolved",
+    "candle_starts": []
+  },
+  "entry_price": null,
+  "structural_invalidation_price": null,
+  "target_price": null,
+  "decision": "unresolved",
+  "explanation": "",
+  "unresolved_fields": [
+    "acd_levels",
+    "momentum",
+    "confirmation",
+    "structural_invalidation_price",
+    "target_price"
+  ],
+  "chart_evidence": []
+}
