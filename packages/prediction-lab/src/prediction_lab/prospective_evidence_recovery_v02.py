@@ -7,7 +7,6 @@ import json
 import shutil
 import time
 from collections import Counter
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
