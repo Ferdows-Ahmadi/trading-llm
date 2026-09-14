@@ -8,10 +8,10 @@ from strategy_lab.core.opening_range import (
     OpeningRangeDataError,
     compute_m1_opening_range,
 )
-from strategy_lab.core.sessions import build_session_window
+from strategy_lab.core.sessions import SessionWindow, build_session_window
 
 
-def _window():
+def _window() -> SessionWindow:
     return build_session_window(
         SessionKind.AMERICA_NEW_YORK,
         date(2026, 9, 14),
@@ -19,9 +19,9 @@ def _window():
     )
 
 
-def _complete_or_candles():
+def _complete_or_candles() -> list[Candle]:
     window = _window()
-    candles = []
+    candles: list[Candle] = []
     for index in range(40):
         started = window.opens_at_utc + timedelta(minutes=index)
         base = 100.0 + index
@@ -77,7 +77,7 @@ def test_duplicate_or_candle_is_rejected() -> None:
 def test_candle_requires_timezone_aware_timestamp() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         Candle(
-            started_at=datetime(2026, 9, 14, 13, 30),
+            started_at=datetime(2026, 9, 14, 13, 30),  # noqa: DTZ001 - intentional invalid input
             open=100.0,
             high=101.0,
             low=99.0,
