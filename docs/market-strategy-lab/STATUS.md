@@ -9,7 +9,9 @@ Stage 0: collaboration/research boundaries — implemented
 Stage 1: timezone-safe session + Opening Range reconstruction — implemented
 Stage 2: external A/C level provider contract — implemented
 Stage 3: previous-trend + M15/M5 directional context contract — implemented
-Stage 4: auditable setup state machine / decision ledger — next
+Stage 4: auditable setup state machine / decision ledger — implemented
+Stage 5: structural stop + target + R:R trade-plan contract — next
+Stage 6: validation corpus format — implemented; corpus population pending
 ```
 
 ## Current branch / PR
@@ -22,7 +24,7 @@ PR: #2 Market Strategy Lab v0.1: ACD research foundation (draft)
 Latest verified Market Strategy Lab CI at this snapshot:
 
 ```text
-run: 34876280799
+run: 34876678494
 result: success
 checks: pytest + Ruff + mypy
 ```
@@ -48,14 +50,14 @@ checks: pytest + Ruff + mypy
 | External A/C level provider | Contract implemented; exact formula unresolved |
 | Previous-trend provider/algorithm | Provider/annotation contract implemented; deterministic swing algorithm unresolved |
 | M15/M5 direction contract | Implemented with timestamp/no-lookahead validation |
-| M1 setup state machine | Not started |
-| Momentum classifier | Unresolved / not started |
-| Confirmation engine | Partially specified, not started |
-| Structural stop selector | Partially specified, not started |
-| Target selector | Unresolved / not started |
-| R:R gate | Core 1:2 primitive implemented |
-| Decision ledger | Not started |
-| Validation corpus | Not started |
+| M1 setup state machine | Implemented as explicit immutable transitions |
+| Momentum classifier | Qualitative states represented; quantitative classifier unresolved |
+| Confirmation engine | States/modes represented; exact candle geometry unresolved |
+| Structural stop selector | Partially specified; Stage 5 provider contract next |
+| Target selector | Unresolved; Stage 5 provider contract next |
+| R:R gate | Core 1:2 primitive implemented; Stage 5 integration next |
+| Decision ledger | Implemented, versioned, append-only/immutable |
+| Validation corpus | Machine-readable format/schema implemented; examples pending |
 | Historical replay | Not started |
 | Cost model | Not started |
 | Backtest | Not started |
@@ -64,23 +66,30 @@ checks: pytest + Ruff + mypy
 | LLM augmentation experiment | Deferred |
 | Live execution | Not authorized |
 
-## Directional-context safety now enforced
+## State-machine safety now enforced
 
-- previous-trend observations cannot extend into the current Opening Range;
-- M15/M5 observations are timestamped independently;
-- context snapshots carry source/version identity;
-- snapshots cannot be used before their latest observation exists;
-- snapshots from the future are rejected at decision time;
-- session identity and session-open instant must match;
-- M1 is intentionally excluded from the directional-bias contract.
+- legal setup transitions are explicit;
+- every transition is immutable and timestamped;
+- timestamps cannot move backward;
+- post-session states cannot precede session opening;
+- terminal accepted/rejected/unresolved states require explicit reasons;
+- unresolved momentum/confirmation cannot silently become a ready candidate;
+- terminal states cannot transition further;
+- ledger serialization carries explicit schema and strategy versions.
+
+## Validation-corpus boundary
+
+The canonical fidelity corpus now has a documented JSON schema and example template. It records source provenance, OR/ACD values, trend/context labels, boundary, momentum, confirmation, intended entry/invalidation/target, take/skip/unresolved decision, explanation and unresolved fields.
+
+Realized outcomes and later P/L are deliberately excluded from fidelity annotations so implementation matching is not confused with profit optimization.
 
 ## Immediate engineering frontier
 
-1. Build the auditable ACD setup state machine and decision ledger (#4).
-2. Define the annotated trader-validation corpus format (#5).
-3. Keep unresolved momentum, confirmation, structural-stop and target logic explicit rather than fabricating thresholds.
-4. Connect OR + A/C levels + directional context into deterministic candidate-state transitions.
-5. Prepare the historical replay boundary without future-candle leakage.
+1. Formalize provider-supplied structural invalidation and target values without inventing swing/target-selection algorithms.
+2. Integrate deterministic BUY/SELL geometry and the 1:2 minimum R:R gate.
+3. Represent exactly-2R full exit versus >2R partial-at-2R with remainder management explicitly unresolved.
+4. Tighten `ACCEPTED` setup decisions so an accepted trade must have a validated trade plan.
+5. Prepare chronological historical replay/resampling with no future-candle leakage.
 
 ## Research inputs still needed later
 
