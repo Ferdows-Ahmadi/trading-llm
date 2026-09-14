@@ -14,6 +14,7 @@ from enum import StrEnum
 from math import isfinite
 
 from .models import DecisionStatus, MomentumClass, RiskReward, SessionKind, TrendDirection
+from .trade_plan import TradePlanStatus, ValidatedTradePlan
 
 LEDGER_SCHEMA_VERSION = "acd-decision-ledger-v0.1"
 STRATEGY_VERSION = "acd-fast-scalp-v0.1"
@@ -115,6 +116,7 @@ class SetupSnapshot:
     stop_price: float | None = None
     target_price: float | None = None
     risk_reward: RiskReward | None = None
+    trade_plan: ValidatedTradePlan | None = None
     reason: str = ""
 
     def __post_init__(self) -> None:
@@ -142,6 +144,30 @@ class SetupSnapshot:
             if self.confirmation_result is not ConfirmationResult.CONFIRMED:
                 raise SetupStateError("candidate-ready/accepted state requires confirmed execution")
 
+        if self.trade_plan is not None:
+            if self.trade_plan.available_at_utc > self.at.astimezone(UTC):
+                raise SetupStateError("trade plan was not available at setup transition time")
+            explicit_pairs = (
+                ("entry_price", self.entry_price, self.trade_plan.entry_price),
+                ("stop_price", self.stop_price, self.trade_plan.structural_invalidation_price),
+                ("target_price", self.target_price, self.trade_plan.target_price),
+            )
+            for field_name, explicit_value, plan_value in explicit_pairs:
+                if explicit_value is not None and explicit_value != plan_value:
+                    raise SetupStateError(
+                        f"{field_name} conflicts with the validated trade plan"
+                    )
+            if self.risk_reward is not None and self.risk_reward != self.trade_plan.risk_reward:
+                raise SetupStateError("risk_reward conflicts with the validated trade plan")
+
+        if self.state is SetupState.ACCEPTED:
+            if self.trade_plan is None:
+                raise SetupStateError("accepted setup requires a validated trade plan")
+            if self.trade_plan.status is not TradePlanStatus.ACCEPTED:
+                raise SetupStateError("accepted setup requires an accepted trade plan")
+            if not self.trade_plan.meets_minimum_rr:
+                raise SetupStateError("accepted setup requires risk/reward of at least 1:2")
+
         if self.state in _TERMINAL_STATES and not self.reason.strip():
             raise SetupStateError("terminal setup state requires an explicit reason")
 
@@ -156,12 +182,35 @@ class SetupSnapshot:
         return None
 
     def to_dict(self) -> dict[str, object]:
+        effective_entry = self.entry_price
+        effective_stop = self.stop_price
+        effective_target = self.target_price
+        effective_rr = self.risk_reward
+        trade_plan_payload: dict[str, object] | None = None
+
+        if self.trade_plan is not None:
+            effective_entry = self.trade_plan.entry_price
+            effective_stop = self.trade_plan.structural_invalidation_price
+            effective_target = self.trade_plan.target_price
+            effective_rr = self.trade_plan.risk_reward
+            trade_plan_payload = {
+                "side": self.trade_plan.side.value,
+                "status": self.trade_plan.status.value,
+                "source": self.trade_plan.source,
+                "exit_management": self.trade_plan.exit_management.value,
+                "first_2r_price": self.trade_plan.first_2r_price,
+                "remainder_rule_resolved": self.trade_plan.remainder_rule_resolved,
+                "observed_through": self.trade_plan.observed_through_utc.isoformat(),
+                "available_at": self.trade_plan.available_at_utc.isoformat(),
+                "reason": self.trade_plan.reason,
+            }
+
         rr_payload: dict[str, float] | None = None
-        if self.risk_reward is not None:
+        if effective_rr is not None:
             rr_payload = {
-                "risk": self.risk_reward.risk,
-                "reward": self.risk_reward.reward,
-                "ratio": self.risk_reward.ratio,
+                "risk": effective_rr.risk,
+                "reward": effective_rr.reward,
+                "ratio": effective_rr.ratio,
             }
 
         return {
@@ -174,10 +223,11 @@ class SetupSnapshot:
             "momentum": self.momentum.value,
             "confirmation_mode": self.confirmation_mode.value,
             "confirmation_result": self.confirmation_result.value,
-            "entry_price": self.entry_price,
-            "stop_price": self.stop_price,
-            "target_price": self.target_price,
+            "entry_price": effective_entry,
+            "stop_price": effective_stop,
+            "target_price": effective_target,
             "risk_reward": rr_payload,
+            "trade_plan": trade_plan_payload,
             "decision_status": (
                 self.decision_status.value if self.decision_status is not None else None
             ),
@@ -214,6 +264,8 @@ class AcdDecisionLedger:
         for entry in self.entries:
             if entry.at.astimezone(UTC) < session_open_utc and entry.state is not SetupState.SESSION_WAIT:
                 raise SetupStateError("post-session states cannot precede the session opening")
+            if entry.trade_plan is not None and entry.trade_plan.session is not self.session:
+                raise SetupStateError("trade plan session does not match decision ledger session")
             if previous is not None:
                 if entry.at.astimezone(UTC) < previous.at.astimezone(UTC):
                     raise SetupStateError("decision ledger timestamps must be non-decreasing")
