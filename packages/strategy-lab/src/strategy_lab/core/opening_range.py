@@ -7,10 +7,10 @@ not an invitation to guess the range.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import isfinite
-from typing import Iterable
 
 from .sessions import OPENING_RANGE_DURATION, SessionWindow
 
