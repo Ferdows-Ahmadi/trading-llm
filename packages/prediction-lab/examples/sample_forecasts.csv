@@ -1,0 +1,4 @@
+question_id,question_text,forecasted_at,resolved_at,market_price_timestamp,source_cutoff_at,market_probability,model_probability,outcome,category,model_name,split
+demo-1,Will Demo Event A occur?,2026-01-01T12:00:00Z,2026-01-10T00:00:00Z,2026-01-01T11:59:00Z,2026-01-01T11:55:00Z,0.55,0.63,1,technology,manual-baseline,test
+demo-2,Will Demo Event B occur?,2026-01-02T12:00:00Z,2026-01-12T00:00:00Z,2026-01-02T11:59:00Z,2026-01-02T11:55:00Z,0.42,0.34,0,economics,manual-baseline,test
+demo-3,Will Demo Event C occur?,2026-01-03T12:00:00Z,2026-02-14T00:00:00Z,2026-01-03T11:59:00Z,2026-01-03T11:55:00Z,0.68,0.72,1,world,manual-baseline,test

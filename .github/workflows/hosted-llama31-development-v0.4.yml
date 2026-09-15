@@ -1,0 +1,255 @@
+name: Hosted Llama 3.1 8B Development v0.4
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/hosted-llama31-development-v0.4.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  llama31-development:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify relevance-only experiment contract
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          pytest -q \
+            packages/prediction-lab/tests/test_ollama_adapter.py \
+            packages/prediction-lab/tests/test_local_development_cli.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/ollama_adapter.py \
+            packages/prediction-lab/src/prediction_lab/local_development_cli.py \
+            packages/prediction-lab/tests/test_ollama_adapter.py \
+            packages/prediction-lab/tests/test_local_development_cli.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("docs/experiments/evidence-relevance-v2-canonical.json")
+          value = json.loads(path.read_text(encoding="utf-8"))
+          expected = {
+              "schema_version": 1,
+              "workflow_run": 34689232387,
+              "artifact": "evidence-relevance-filter-v0.2",
+              "artifact_digest": "sha256:1d0280f73d0a48f925dd4ef5f48ab6328a5f7d16ea295d4f78fadcd7e741c0e4",
+              "filtered_fixture_sha256": "cfafa8c780c7067c656a5c8474f172f46239f12e10f1632cd22256f2430a3035",
+              "artifact_code_commit": "700353ec323ab7a0274197ae8e3996761babf4ec",
+              "preregistration_commit": "651a65d00db80ea194e4a95d314bb6ebd03a29f5",
+          }
+          for key, expected_value in expected.items():
+              if value.get(key) != expected_value:
+                  raise SystemExit(
+                      f"canonical evidence lineage changed for {key}: "
+                      f"{value.get(key)!r} != {expected_value!r}"
+                  )
+          expected_summary = {
+              "method_version": "lexical-relevance-v2",
+              "pilot_questions": 20,
+              "raw_items": 94,
+              "kept_items": 7,
+              "questions_with_kept": 4,
+              "questions_without_kept": 16,
+              "max_items_per_question": 5,
+              "lead_words": 40,
+              "intent_window_words": 50,
+              "min_body_subject_mentions": 2,
+          }
+          if value.get("expected_summary") != expected_summary:
+              raise SystemExit("canonical evidence expected_summary changed")
+          print("Verified frozen relevance-v2 evidence lineage")
+          PY
+          gh auth status
+
+      - name: Install and start local Ollama runtime
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          mkdir -p "$RUNNER_TEMP/llama-runtime"
+          ollama --version | tee "$RUNNER_TEMP/llama-runtime/ollama-version.txt"
+          sha256sum "$(command -v ollama)" | tee "$RUNNER_TEMP/llama-runtime/ollama-binary-sha256.txt"
+          uname -a | tee "$RUNNER_TEMP/llama-runtime/host.txt"
+          python --version 2>&1 | tee "$RUNNER_TEMP/llama-runtime/python-version.txt"
+          ollama serve > "$RUNNER_TEMP/llama-runtime/ollama-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/llama-runtime/ollama-server.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:11434/api/tags >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Ollama did not become ready" >&2
+          cat "$RUNNER_TEMP/llama-runtime/ollama-server.log" >&2 || true
+          exit 1
+
+      - name: Freeze and verify exact Llama 3.1 8B artifact
+        run: |
+          ollama pull llama3.1:8b
+          curl --fail --silent --show-error http://127.0.0.1:11434/api/tags \
+            | tee "$RUNNER_TEMP/llama-runtime/ollama-tags-after-pull.json"
+          python - "$RUNNER_TEMP/llama-runtime/ollama-tags-after-pull.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          expected = "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e"
+          value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          models = value.get("models")
+          if not isinstance(models, list):
+              raise SystemExit("Ollama tag listing missing models")
+          match = next(
+              (
+                  item
+                  for item in models
+                  if isinstance(item, dict)
+                  and item.get("name") == "llama3.1:8b"
+              ),
+              None,
+          )
+          if match is None:
+              raise SystemExit("llama3.1:8b missing after pull")
+          actual = match.get("digest")
+          if actual != expected:
+              raise SystemExit(
+                  f"Llama artifact digest changed: actual={actual!r}, expected={expected!r}"
+              )
+          print(f"Verified frozen model digest: sha256:{actual}")
+          PY
+          ollama show llama3.1:8b --modelfile \
+            > "$RUNNER_TEMP/llama-runtime/llama31-modelfile.txt"
+          ollama list | tee "$RUNNER_TEMP/llama-runtime/ollama-list.txt"
+
+      - name: Run relevance-v2-only frozen development experiment
+        run: |
+          python -m prediction_lab.local_development_cli \
+            --repository-root . \
+            --work-root "$RUNNER_TEMP/llama31-development" \
+            --ollama-model llama3.1:8b \
+            --ollama-base-url http://127.0.0.1:11434 \
+            --ollama-timeout-seconds 1200 \
+            --evidence-spec docs/experiments/evidence-relevance-v2-canonical.json
+
+      - name: Require exact relevance-v2 lineage and complete coverage
+        run: |
+          SUMMARY="$(find "$RUNNER_TEMP/llama31-development" -name local-development-summary.json -type f -print -quit)"
+          test -n "$SUMMARY"
+          python - "$SUMMARY" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding="utf-8"))
+          if value.get("dataset_role") != "development-only":
+              raise SystemExit("unexpected dataset role")
+          if value.get("holdout_accessed") is not False:
+              raise SystemExit("holdout access flag changed")
+          if value.get("code_commit") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("experiment code commit differs from workflow head")
+          if value.get("prompt_version") != "research-v0":
+              raise SystemExit("prompt version changed")
+          expected_model = (
+              "sha256:46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e"
+          )
+          if value.get("model_immutable_version") != expected_model:
+              raise SystemExit("exact model digest changed")
+
+          inputs = value.get("inputs")
+          if not isinstance(inputs, dict):
+              raise SystemExit("input lineage missing")
+          development = inputs.get("development_pilot")
+          if not isinstance(development, dict):
+              raise SystemExit("development pilot lineage missing")
+          expected_development = {
+              "workflow_run": 34555783305,
+              "artifact": "prediction-lab-development-pilot-v0.1",
+              "artifact_digest": "sha256:c8b24dd5b92fd36625d756ea4f94d98841ce8303757190d2c6385c27276032c7",
+              "dataset_sha256": "d27e2b84cf1f3bc9bdeb4904e15791aad5d2e586685b7f32ab1647d15eee41ce",
+          }
+          if development != expected_development:
+              raise SystemExit("development pilot lineage changed")
+
+          evidence = inputs.get("filtered_evidence")
+          if not isinstance(evidence, dict):
+              raise SystemExit("filtered evidence lineage missing")
+          expected_evidence = {
+              "workflow_run": 34689232387,
+              "artifact": "evidence-relevance-filter-v0.2",
+              "artifact_digest": "sha256:1d0280f73d0a48f925dd4ef5f48ab6328a5f7d16ea295d4f78fadcd7e741c0e4",
+              "filtered_fixture_sha256": "cfafa8c780c7067c656a5c8474f172f46239f12e10f1632cd22256f2430a3035",
+              "artifact_code_commit": "700353ec323ab7a0274197ae8e3996761babf4ec",
+              "preregistration_commit": "651a65d00db80ea194e4a95d314bb6ebd03a29f5",
+              "expected_summary": {
+                  "method_version": "lexical-relevance-v2",
+                  "pilot_questions": 20,
+                  "raw_items": 94,
+                  "kept_items": 7,
+                  "questions_with_kept": 4,
+                  "questions_without_kept": 16,
+                  "max_items_per_question": 5,
+                  "lead_words": 40,
+                  "intent_window_words": 50,
+                  "min_body_subject_mentions": 2,
+              },
+          }
+          if evidence != expected_evidence:
+              raise SystemExit("relevance-v2 evidence lineage changed")
+
+          modes = value.get("modes")
+          if not isinstance(modes, dict) or set(modes) != {"blind", "market-aware"}:
+              raise SystemExit("both forecast modes were not persisted")
+          for mode in ("blind", "market-aware"):
+              execution = modes[mode].get("execution")
+              if not isinstance(execution, dict):
+                  raise SystemExit(f"{mode} execution summary missing")
+              expected_execution = {
+                  "total_questions": 20,
+                  "successful_forecasts": 20,
+                  "failed_forecasts": 0,
+                  "forecast_coverage": 1.0,
+              }
+              for key, expected_value in expected_execution.items():
+                  if execution.get(key) != expected_value:
+                      raise SystemExit(
+                          f"{mode} did not reach the clean coverage gate: "
+                          f"{key}={execution.get(key)!r}, expected {expected_value!r}"
+                      )
+          print(json.dumps(value, indent=2, sort_keys=True))
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload relevance-v2 development experiment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama31-8b-development-v0.4
+          path: |
+            ${{ runner.temp }}/llama31-development/
+            ${{ runner.temp }}/llama-runtime/
+          if-no-files-found: warn
+          retention-days: 30

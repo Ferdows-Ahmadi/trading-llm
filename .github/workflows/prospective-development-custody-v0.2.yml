@@ -1,0 +1,127 @@
+name: Prospective Development Custody v0.2
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/prospective-development-custody-v0.2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROTOCOL_COMMIT: 12a39fcc156ace92356e3d6b05b7a444f6c23679
+
+jobs:
+  custody:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install Prediction Lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen v0.2 contract before live query
+        run: |
+          test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$PROTOCOL_COMMIT" "$GITHUB_SHA"
+          python - <<'PY'
+          import os
+          from prediction_lab import prospective_polymarket_custody_v02 as v02
+
+          assert v02.PROTOCOL_COMMIT == os.environ["PROTOCOL_COMMIT"]
+          assert v02.PURPOSE == "prospective-development-custody-v0.2"
+          assert v02.MAX_PAGES == 1000
+          assert str(v02.MIN_HORIZON) == "7 days 00:00:00"
+          assert str(v02.MAX_HORIZON) == "90 days 00:00:00"
+          assert v02.TARGET_COHORT == 100
+          assert v02.ADEQUACY_FLOOR == 60
+          PY
+          pytest -q packages/prediction-lab/tests/test_prospective_polymarket_custody_v02.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/prospective_polymarket_custody_v02.py \
+            packages/prediction-lab/tests/test_prospective_polymarket_custody_v02.py
+
+      - name: Acquire and freeze one-time prospective v0.2 custody
+        run: |
+          python -m prediction_lab.prospective_polymarket_custody_v02 \
+            "$RUNNER_TEMP/prospective-development-custody-v0.2" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Verify custody accounting without semantic inspection
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "prospective-development-custody-v0.2"
+          summary = json.loads((root / "custody-summary.json").read_text())
+          rows = [
+              json.loads(line)
+              for line in (root / "cohort.jsonl").read_text().splitlines()
+              if line.strip()
+          ]
+          ledger = [
+              json.loads(line)
+              for line in (root / "selection-ledger.jsonl").read_text().splitlines()
+              if line.strip()
+          ]
+
+          assert summary["purpose"] == "prospective-development-custody-v0.2"
+          assert summary["protocol_commit"] == os.environ["PROTOCOL_COMMIT"]
+          assert summary["code_commit"] == os.environ["GITHUB_SHA"]
+          assert summary["pagination_mode"] == "gamma-markets-keyset-after_cursor"
+          assert summary["keyset_max_pages"] == 1000
+          assert summary["target_cohort"] == 100
+          assert summary["adequacy_floor"] == 60
+          assert summary["selected_rows"] == len(rows)
+          assert summary["selected_event_groups"] == len({row["event_id"] for row in rows})
+          assert summary["selected_rows"] <= 100
+          assert len({row["market_id"] for row in rows}) == len(rows)
+          assert len({row["event_id"] for row in rows}) == len(rows)
+          assert len(ledger) == summary["universe_rows"]
+          assert summary["forecaster_run"] is False
+          assert summary["model_score_computed"] is False
+          assert summary["reserved_holdout_accessed"] is False
+
+          print("custody_rows:", summary["selected_rows"])
+          print("custody_event_groups:", summary["selected_event_groups"])
+          print(
+              "adequate_for_forecaster_preregistration:",
+              summary["custody_adequate_for_forecaster_preregistration"],
+          )
+          print("gamma_pages:", summary["gamma_pages"])
+          print("universe_rows:", summary["universe_rows"])
+          print("structurally_eligible_markets:", summary["structurally_eligible_markets"])
+          print("event_representatives:", summary["event_representatives"])
+          print("clob_valid_event_representatives:", summary["clob_valid_event_representatives"])
+          print("clob_transport_failures:", summary["clob_transport_failures"])
+          print("clob_rejection_reason_counts:", summary["clob_rejection_reason_counts"])
+          print("cohort_sha256:", summary["cohort_sha256"])
+          print("universe_sha256:", summary["universe_sha256"])
+          PY
+
+      - name: Upload immutable prospective v0.2 custody artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-development-custody-v0.2
+          path: ${{ runner.temp }}/prospective-development-custody-v0.2/
+          if-no-files-found: error
+          retention-days: 90

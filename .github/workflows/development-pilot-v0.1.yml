@@ -1,0 +1,107 @@
+name: Development Pilot v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/development-pilot-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/pilot_dataset.py
+      - packages/prediction-lab/src/prediction_lab/pilot_dataset_cli.py
+      - packages/prediction-lab/tests/test_pilot_dataset.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  freeze-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen GDELT discovery pilot
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Remove final holdout before pilot derivation
+        run: |
+          rm -f benchmark/holdout*
+          if find benchmark -maxdepth 1 -type f -name 'holdout*' | grep -q .; then
+            echo "holdout files remain" >&2
+            exit 1
+          fi
+
+      - name: Freeze exact 20-question development pilot
+        run: |
+          mkdir -p development-pilot
+          prediction-lab-build-pilot \
+            benchmark/development.csv \
+            benchmark/development.manifest.json \
+            discovery-pilot/discovery.jsonl \
+            development-pilot/development-pilot.csv \
+            development-pilot/development-pilot.manifest.json \
+            --expected-question-count 20
+
+      - name: Verify pilot dataset
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from prediction_lab.datasets import verify_frozen_dataset
+
+          manifest = json.loads(
+              Path("development-pilot/development-pilot.manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          frame = verify_frozen_dataset(
+              csv_path="development-pilot/development-pilot.csv",
+              manifest_path="development-pilot/development-pilot.manifest.json",
+          )
+          if len(frame) != 20 or frame["question_id"].nunique() != 20:
+              raise SystemExit("development pilot is not exactly 20 unique questions")
+          if set(frame["split"].astype(str)) != {"development"}:
+              raise SystemExit("development pilot contains a non-development row")
+          print("pilot sha256:", manifest["sha256"])
+          print("pilot forecast start:", manifest["forecast_start"])
+          print("pilot forecast end:", manifest["forecast_end"])
+          PY
+
+      - name: Upload frozen development pilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-development-pilot-v0.1
+          path: development-pilot/
+          if-no-files-found: error
+          retention-days: 14

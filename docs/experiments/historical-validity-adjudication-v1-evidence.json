@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "purpose": "historical-validity-adjudication-v1-manual-evidence",
+  "protocol_commit": "e42d53029b41392c74281c9fa669fb7fc433ad32",
+  "candidate_sha256": "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21",
+  "source_discovery_artifact_id": 10320984640,
+  "source_discovery_artifact_digest": "sha256:aee2e398b421bd8b2a94fbfd3f5edf2c6fb28c2b71f490e8a98c60ee3b8c7648",
+  "notes": "Manual B/C evidence is frozen only for the three candidates with preregistered A-eligible exact pre-cutoff historical captures. No model output or market probability was consulted.",
+  "cases": {
+    "1068359": {
+      "question": "Hyperliquid listed on Coinbase before 2027?",
+      "b": {
+        "status": "verified",
+        "reason_code": "decisive_fact_after_forecast",
+        "decisive_event_date": "2026-02-05",
+        "decisive_event_lower_bound_utc": "2026-02-05T00:00:00Z",
+        "timestamp_precision": "date",
+        "note": "Contemporaneous reporting reproduces the Coinbase Markets announcement that HYPE spot trading would go live on February 5, 2026. Multiple contemporaneous sources describe the Coinbase spot listing, and Coinbase currently exposes HYPE for purchase. The entire event date is after the frozen January 30 forecast timestamp.",
+        "sources": [
+          {
+            "authority": "Coinbase Markets",
+            "role": "primary-source locator",
+            "url": "https://x.com/CoinbaseMarkets/status/2019454256567181688",
+            "published_date": "2026-02-05"
+          },
+          {
+            "authority": "AMBCrypto",
+            "role": "credible contemporaneous reporting permitted by historical rules",
+            "url": "https://ambcrypto.com/coinbase-listing-fails-to-lift-hype-as-market-structure-caps-upside/",
+            "published_at": "2026-02-05T14:40:00-05:00"
+          },
+          {
+            "authority": "Coinbase",
+            "role": "current first-party confirmation that HYPE is supported for purchase",
+            "url": "https://www.coinbase.com/price/hyperliquid"
+          }
+        ]
+      },
+      "c": {
+        "status": "verified",
+        "reason_code": "authoritative_label_matches",
+        "authoritative_outcome": "Yes",
+        "note": "The contract resolves Yes upon a Coinbase spot listing by December 31, 2026. The February 5 Coinbase listing evidence establishes that condition, independently supporting the frozen canonical Yes label.",
+        "sources": [
+          {
+            "authority": "Coinbase Markets",
+            "role": "primary-source locator",
+            "url": "https://x.com/CoinbaseMarkets/status/2019454256567181688",
+            "published_date": "2026-02-05"
+          },
+          {
+            "authority": "Coinbase",
+            "role": "current first-party support confirmation",
+            "url": "https://www.coinbase.com/price/hyperliquid"
+          }
+        ]
+      }
+    },
+    "1251725": {
+      "question": "Will Binance launch stock tokens in 2026?",
+      "b": {
+        "status": "verified",
+        "reason_code": "decisive_fact_after_forecast",
+        "decisive_event_at": "2026-02-24T14:30:00Z",
+        "timestamp_precision": "minute",
+        "note": "Binance's official announcement states that Ondo tokenized securities were available on Binance Alpha with direct trading using Binance Exchange funds, market and limit orders, and instructions to select a tokenized security and trade it. This official publication occurred after the frozen February 17 forecast timestamp.",
+        "sources": [
+          {
+            "authority": "Binance",
+            "role": "primary first-party source",
+            "url": "https://www.binance.com/en/support/announcement/detail/45bc5a87a2534f47879de7dcbe5b4934",
+            "published_at": "2026-02-24T14:30:00Z"
+          },
+          {
+            "authority": "Ondo Finance",
+            "role": "issuer first-party corroboration",
+            "url": "https://ondo.finance/blog/tokenized-stocks-live-on-binance",
+            "published_date": "2026-02-24"
+          }
+        ]
+      },
+      "c": {
+        "status": "verified",
+        "reason_code": "authoritative_label_matches",
+        "authoritative_outcome": "Yes",
+        "note": "The frozen historical rules require Binance users to be able to buy or sell tokenized U.S.-listed equities by December 31, 2026. Binance's February 24 first-party announcement provides direct trading instructions and establishes the Yes condition, matching the canonical label.",
+        "sources": [
+          {
+            "authority": "Binance",
+            "role": "primary first-party source",
+            "url": "https://www.binance.com/en/support/announcement/detail/45bc5a87a2534f47879de7dcbe5b4934",
+            "published_at": "2026-02-24T14:30:00Z"
+          }
+        ]
+      }
+    },
+    "1832174": {
+      "question": "Another crypto hack over $100m by December 31?",
+      "b": {
+        "status": "verified",
+        "reason_code": "decisive_fact_after_forecast",
+        "decisive_event_at": "2026-04-18T17:35:00Z",
+        "timestamp_precision": "minute",
+        "note": "The historical rules name the Rekt News leaderboard as the primary source. Rekt records KelpDAO at approximately $290 million on April 18, 2026, and its incident article describes the April 18 exploit. Independent forensic/reporting sources place the drain at approximately 17:35 UTC. This is strictly after the frozen April 12 forecast timestamp.",
+        "sources": [
+          {
+            "authority": "Rekt News",
+            "role": "historical-rules primary source",
+            "url": "https://rekt.news/leaderboard/",
+            "event_date": "2026-04-18",
+            "reported_loss_usd": 290000000
+          },
+          {
+            "authority": "Rekt News",
+            "role": "primary-source incident article",
+            "url": "https://rekt.news/kelpdao-rekt",
+            "published_date": "2026-04-24"
+          },
+          {
+            "authority": "Chainalysis",
+            "role": "independent forensic corroboration",
+            "url": "https://www.chainalysis.com/blog/kelpdao-bridge-exploit-april-2026/",
+            "event_date": "2026-04-18"
+          }
+        ]
+      },
+      "c": {
+        "status": "verified",
+        "reason_code": "authoritative_label_matches",
+        "authoritative_outcome": "Yes",
+        "note": "The historical contract resolves Yes if a crypto project or exchange suffers an exploit or hack worth at least $100 million during the market period. The Rekt leaderboard records KelpDAO at approximately $290 million on April 18, 2026, satisfying the condition and matching the canonical Yes label.",
+        "sources": [
+          {
+            "authority": "Rekt News",
+            "role": "historical-rules primary source",
+            "url": "https://rekt.news/leaderboard/",
+            "event_date": "2026-04-18",
+            "reported_loss_usd": 290000000
+          },
+          {
+            "authority": "Rekt News",
+            "role": "primary-source incident article",
+            "url": "https://rekt.news/kelpdao-rekt",
+            "published_date": "2026-04-24"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,141 @@
+name: Historical Validity Adjudication v1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-validity-adjudication-v1.yml
+      - docs/experiments/historical-validity-adjudication-v1-protocol.md
+      - docs/experiments/historical-validity-adjudication-v1-evidence.json
+      - packages/prediction-lab/src/prediction_lab/historical_validity_adjudication.py
+      - packages/prediction-lab/tests/test_historical_validity_adjudication.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PROTOCOL_COMMIT: e42d53029b41392c74281c9fa669fb7fc433ad32
+  EVIDENCE_COMMIT: 92f77c29817928c26eec6a6c6eaed13b0fd6e9ee
+
+jobs:
+  adjudicate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install Prediction Lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen adjudication contract
+        run: |
+          test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$PROTOCOL_COMMIT" "$GITHUB_SHA"
+          git merge-base --is-ancestor "$EVIDENCE_COMMIT" "$GITHUB_SHA"
+          pytest -q packages/prediction-lab/tests/test_historical_validity_adjudication.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/historical_validity_adjudication.py \
+            packages/prediction-lab/tests/test_historical_validity_adjudication.py
+
+      - name: Download and verify exact frozen inputs
+        run: |
+          mkdir -p "$RUNNER_TEMP/candidates" "$RUNNER_TEMP/development" "$RUNNER_TEMP/source-v2"
+
+          gh api \
+            repos/$GITHUB_REPOSITORY/actions/artifacts/10312295819/zip \
+            > "$RUNNER_TEMP/candidates.zip"
+          echo "dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af  $RUNNER_TEMP/candidates.zip" \
+            | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/candidates.zip" -d "$RUNNER_TEMP/candidates"
+
+          gh api \
+            repos/$GITHUB_REPOSITORY/actions/artifacts/10312220631/zip \
+            > "$RUNNER_TEMP/development.zip"
+          echo "6b07738113cc4bd0f04e634459bb0eb8ac34f2ceb75ffe3b9989c9e81ef95d20  $RUNNER_TEMP/development.zip" \
+            | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/development.zip" -d "$RUNNER_TEMP/development"
+
+          gh api \
+            repos/$GITHUB_REPOSITORY/actions/artifacts/10320984640/zip \
+            > "$RUNNER_TEMP/source-v2.zip"
+          echo "aee2e398b421bd8b2a94fbfd3f5edf2c6fb28c2b71f490e8a98c60ee3b8c7648  $RUNNER_TEMP/source-v2.zip" \
+            | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/source-v2.zip" -d "$RUNNER_TEMP/source-v2"
+
+          test "$(sha256sum "$RUNNER_TEMP/candidates/candidates.csv" | cut -d' ' -f1)" = \
+            "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
+          test "$(sha256sum "$RUNNER_TEMP/development/development.csv" | cut -d' ' -f1)" = \
+            "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+
+      - name: Freeze full 64-case A/B/C audit
+        run: |
+          python -m prediction_lab.historical_validity_adjudication \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/development/development.csv" \
+            "$RUNNER_TEMP/source-v2" \
+            docs/experiments/historical-validity-adjudication-v1-evidence.json \
+            "$RUNNER_TEMP/historical-validity-audit-v1" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Require complete frozen audit accounting
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "historical-validity-audit-v1"
+          summary = json.loads(
+              (root / "historical-validity-audit-v1-summary.json").read_text()
+          )
+          assert summary["candidate_rows"] == 64
+          assert summary["a_status_counts"] == {"unknown": 61, "verified": 3}
+          assert summary["b_status_counts"] == {"unknown": 61, "verified": 3}
+          assert summary["c_status_counts"] == {"unknown": 61, "verified": 3}
+          assert summary["overall_classification_counts"] == {
+              "invalid": 0,
+              "unknown": 61,
+              "verified_valid": 3,
+          }
+          assert summary["verified_valid_question_ids"] == [
+              "1068359",
+              "1251725",
+              "1832174",
+          ]
+          assert summary["forecaster_run"] is False
+          assert summary["reserved_holdout_accessed"] is False
+          rows = [
+              json.loads(line)
+              for line in (root / "historical-validity-audit-v1.jsonl")
+              .read_text()
+              .splitlines()
+              if line.strip()
+          ]
+          assert len(rows) == 64
+          assert len({row["question_id"] for row in rows}) == 64
+          PY
+
+      - name: Upload frozen historical-validity audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-audit-v1
+          path: ${{ runner.temp }}/historical-validity-audit-v1/
+          if-no-files-found: error
+          retention-days: 90

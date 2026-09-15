@@ -1,0 +1,153 @@
+name: Historical Validity Candidates v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-validity-candidates-v0.1.yml
+      - packages/prediction-lab/src/prediction_lab/historical_validity_candidates.py
+      - packages/prediction-lab/tests/test_historical_validity_candidates.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  freeze-candidates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify candidate-freeze implementation and preregistration
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor c3a66d28d7126155935ccdd255034e7560dce6f0 "$GITHUB_SHA"
+          pytest -q packages/prediction-lab/tests/test_historical_validity_candidates.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/historical_validity_candidates.py \
+            packages/prediction-lab/tests/test_historical_validity_candidates.py
+          gh auth status
+
+      - name: Download verified development-only custody derivative
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738355385,
+              name="polymarket-development-v0.1-custody-derivative",
+              digest="sha256:6b07738113cc4bd0f04e634459bb0eb8ac34f2ceb75ffe3b9989c9e81ef95d20",
+              destination=Path(os.environ["RUNNER_TEMP"]) / "development-only",
+              allowed_files=frozenset(
+                  {"development.csv", "development.manifest.json", "custody-receipt.json"}
+              ),
+              code_commit="137fc28a204fd399823cf61987aff6f1f3031859",
+          )
+          PY
+
+      - name: Freeze fresh event-independent candidates
+        run: |
+          mkdir -p "$RUNNER_TEMP/validity-candidates"
+          python -m prediction_lab.historical_validity_candidates \
+            "$RUNNER_TEMP/development-only/development.csv" \
+            "$RUNNER_TEMP/development-only/development.manifest.json" \
+            "$RUNNER_TEMP/validity-candidates/candidates.csv" \
+            "$RUNNER_TEMP/validity-candidates/candidates.manifest.json" \
+            --code-commit "$GITHUB_SHA" \
+            --source-artifact-id 10312220631 \
+            --source-artifact-digest sha256:6b07738113cc4bd0f04e634459bb0eb8ac34f2ceb75ffe3b9989c9e81ef95d20
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/validity-candidates/code-commit.txt"
+          printf '%s\n' c3a66d28d7126155935ccdd255034e7560dce6f0 \
+            > "$RUNNER_TEMP/validity-candidates/preregistration-commit.txt"
+
+      - name: Verify frozen candidate artifact
+        run: |
+          python - "$RUNNER_TEMP/validity-candidates" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          import pandas as pd
+
+          from prediction_lab.historical_validity_candidates import (
+              CANDIDATE_COLUMNS,
+              PILOT_EVENT_IDS,
+              PREREGISTRATION_COMMIT,
+              SOURCE_DEVELOPMENT_SHA256,
+          )
+
+          root = Path(sys.argv[1])
+          manifest = json.loads((root / "candidates.manifest.json").read_text(encoding="utf-8"))
+          csv_bytes = (root / "candidates.csv").read_bytes()
+          digest = hashlib.sha256(csv_bytes).hexdigest()
+          if digest != manifest.get("sha256"):
+              raise SystemExit("candidate CSV digest does not match manifest")
+          if manifest.get("source_development_sha256") != SOURCE_DEVELOPMENT_SHA256:
+              raise SystemExit("candidate source lineage changed")
+          if manifest.get("preregistration_commit") != PREREGISTRATION_COMMIT:
+              raise SystemExit("candidate preregistration lineage changed")
+          if manifest.get("code_commit") != (root / "code-commit.txt").read_text().strip():
+              raise SystemExit("candidate code commit marker mismatch")
+          if manifest.get("retrospective_close_anchored_schedule") is not True:
+              raise SystemExit("retrospective schedule limitation was not persisted")
+
+          frame = pd.read_csv(root / "candidates.csv", dtype={"question_id": str})
+          if tuple(frame.columns) != CANDIDATE_COLUMNS:
+              raise SystemExit("candidate artifact exposes non-preregistered columns")
+          if len(frame) != int(manifest["row_count"]):
+              raise SystemExit("candidate row count does not match manifest")
+          if frame["event_id"].astype(str).nunique() != len(frame):
+              raise SystemExit("candidate artifact is not one row per event")
+          if set(frame["event_id"].astype(str)) & PILOT_EVENT_IDS:
+              raise SystemExit("candidate artifact contains a pilot parent event")
+          forbidden = {
+              "outcome",
+              "market_probability",
+              "resolved_at",
+              "market_price_timestamp",
+              "split",
+          }
+          if forbidden & set(frame.columns):
+              raise SystemExit("candidate artifact exposes a forbidden field")
+          print("candidate_rows:", len(frame))
+          print("candidate_event_groups:", frame["event_id"].nunique())
+          print("candidate_sha256:", digest)
+          print("forecast_start:", manifest["forecast_start"])
+          print("forecast_end:", manifest["forecast_end"])
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload frozen historical-validity candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-candidates-v0.1
+          path: ${{ runner.temp }}/validity-candidates/
+          if-no-files-found: error
+          retention-days: 90

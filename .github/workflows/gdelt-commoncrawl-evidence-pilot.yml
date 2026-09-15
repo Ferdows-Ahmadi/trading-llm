@@ -1,0 +1,87 @@
+name: GDELT Common Crawl Evidence Pilot
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/gdelt-commoncrawl-evidence-pilot.yml
+      - packages/prediction-lab/src/prediction_lab/gdelt_evidence.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Verify development benchmark and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before evidence construction")
+          PY
+
+      - name: Build 20-parent-event historical news evidence pilot
+        run: |
+          prediction-lab-news-evidence-pilot \
+            benchmark/development.csv \
+            benchmark/development.manifest.json \
+            evidence-pilot \
+            --pilot-size 20 \
+            --lookback-days 45 \
+            --max-discovery-records 20 \
+            --max-article-urls 4 \
+            --max-evidence-items 2 \
+            --max-collections 2 \
+            --max-characters-per-item 10000
+
+      - name: Print evidence audit
+        run: |
+          cat evidence-pilot/evidence-pilot-summary.json
+          echo "--- pilot audit ---"
+          cat evidence-pilot/evidence-pilot-audit.csv
+
+      - name: Upload evidence pilot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdelt-commoncrawl-evidence-pilot-v0.2
+          path: evidence-pilot/
+          if-no-files-found: error
+          retention-days: 14

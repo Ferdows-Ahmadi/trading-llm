@@ -1,0 +1,142 @@
+name: Prospective Clustered Evidence v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/prospective-clustered-evidence-v0.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CUSTODY_ARTIFACT_ID: "10323747083"
+  CUSTODY_ARCHIVE_SHA256: "01eebf244add1ff21ee8d21257a000c5ee9588f751ae456e7fc7d17c0704a6aa"
+  CUSTODY_COHORT_SHA256: "6c3cea364fd7548934a5e0e3e5a00cb45d1dd124318d9cf31ea0c012af661634"
+  FORECASTER_PROTOCOL_COMMIT: "d6f242b78a983bcd059384a68a5c05954dfc99f2"
+  SCHEMA_CLARIFICATION_COMMIT: "87436e7164489a1699fec81d8cc845ceeca55012"
+  EVIDENCE_STATUS_CLARIFICATION_COMMIT: "cdff80cbf0fd5970799c1419f3ff08d35062729f"
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install Prediction Lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen evidence contract before provider access
+        run: |
+          test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$FORECASTER_PROTOCOL_COMMIT" "$GITHUB_SHA"
+          git merge-base --is-ancestor "$SCHEMA_CLARIFICATION_COMMIT" "$GITHUB_SHA"
+          git merge-base --is-ancestor "$EVIDENCE_STATUS_CLARIFICATION_COMMIT" "$GITHUB_SHA"
+          python - <<'PY'
+          import os
+          from prediction_lab import prospective_evidence_v01 as evidence
+
+          assert evidence.CUSTODY_ARTIFACT_ID == int(os.environ["CUSTODY_ARTIFACT_ID"])
+          assert evidence.CUSTODY_ARCHIVE_SHA256 == os.environ["CUSTODY_ARCHIVE_SHA256"]
+          assert evidence.CUSTODY_COHORT_SHA256 == os.environ["CUSTODY_COHORT_SHA256"]
+          assert evidence.FORECASTER_PROTOCOL_COMMIT == os.environ["FORECASTER_PROTOCOL_COMMIT"]
+          assert evidence.SCHEMA_CLARIFICATION_COMMIT == os.environ["SCHEMA_CLARIFICATION_COMMIT"]
+          assert (
+              evidence.EVIDENCE_STATUS_CLARIFICATION_COMMIT
+              == os.environ["EVIDENCE_STATUS_CLARIFICATION_COMMIT"]
+          )
+          assert evidence.CUSTODY_ROWS == 77
+          assert evidence.CUSTODY_EVENT_GROUPS == 53
+          assert evidence.LOOKBACK_DAYS == 90
+          assert evidence.MAX_GDELT_RECORDS == 50
+          assert evidence.MAX_ARTICLE_URLS == 8
+          assert evidence.MAX_EVIDENCE_ITEMS == 5
+          assert evidence.MAX_COLLECTIONS == 3
+          assert evidence.MAX_CHARACTERS_PER_ITEM == 10_000
+          PY
+          pytest -q packages/prediction-lab/tests/test_prospective_evidence_v01.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/prospective_evidence_v01.py \
+            packages/prediction-lab/tests/test_prospective_evidence_v01.py
+
+      - name: Download and verify immutable custody artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$CUSTODY_ARTIFACT_ID/zip" \
+            > "$RUNNER_TEMP/prospective-development-custody-v0.3.zip"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "prospective-development-custody-v0.3.zip"
+          actual = hashlib.sha256(path.read_bytes()).hexdigest()
+          expected = os.environ["CUSTODY_ARCHIVE_SHA256"]
+          assert actual == expected, (actual, expected)
+          print("custody_archive_sha256:", actual)
+          PY
+
+      - name: Acquire and freeze timestamp-safe evidence
+        run: |
+          python -m prediction_lab.prospective_evidence_v01 \
+            "$RUNNER_TEMP/prospective-development-custody-v0.3.zip" \
+            "$RUNNER_TEMP/prospective-clustered-evidence-v0.1" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Verify forecast-ready evidence accounting
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "prospective-clustered-evidence-v0.1"
+          summary = json.loads((root / "evidence-summary.json").read_text())
+          assert summary["method_version"] == "gdelt-commoncrawl-prospective-v1"
+          assert summary["code_commit"] == os.environ["GITHUB_SHA"]
+          assert summary["rows"] == 77
+          assert summary["event_groups"] == 53
+          assert sum(summary["status_counts"].values()) == 77
+          assert set(summary["status_counts"]).issubset(
+              {"verified_complete", "verified_empty"}
+          )
+          assert summary["forecast_ready"] is True
+          assert summary["reserved_holdout_accessed"] is False
+          assert summary["model_forecast_run"] is False
+          assert summary["outcomes_accessed"] is False
+          print("status_counts:", summary["status_counts"])
+          print("questions_with_evidence:", summary["questions_with_evidence"])
+          print("questions_without_evidence:", summary["questions_without_evidence"])
+          print("total_evidence_items:", summary["total_evidence_items"])
+          print("evidence_fixture_sha256:", summary["evidence_fixture_sha256"])
+          print("evidence_packets_sha256:", summary["evidence_packets_sha256"])
+          print("evidence_audit_sha256:", summary["evidence_audit_sha256"])
+          PY
+
+      - name: Upload evidence checkpoints and artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-clustered-evidence-v0.1
+          path: ${{ runner.temp }}/prospective-clustered-evidence-v0.1/
+          if-no-files-found: warn
+          retention-days: 90

@@ -1,0 +1,477 @@
+name: Historical Validity Source Discovery v0.2 Shard1 Recovery
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/historical-validity-source-discovery-v0.2-shard1-recovery.yml
+      - docs/experiments/historical-validity-source-discovery-v2-shard1-recovery.md
+      - packages/prediction-lab/tools/historical_validity_shard1_recovery.py
+      - packages/prediction-lab/tests/test_historical_validity_shard1_recovery.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  ACQUISITION_COMMIT: 70e1e0dedfd261dc00dc53e9be05b784d5a2f1a2
+  RECOVERY_PLAN_COMMIT: 10d32a8381c0e4453f6590858540644d17ce6c15
+  ORIGINAL_RUN_ID: "34758856382"
+
+jobs:
+  verify-recovery-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout recovery orchestration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: orchestration
+
+      - name: Checkout frozen acquisition code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACQUISITION_COMMIT }}
+          fetch-depth: 0
+          path: frozen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frozen/packages/prediction-lab/pyproject.toml
+
+      - name: Install frozen Prediction Lab
+        run: python -m pip install -e "./frozen/packages/prediction-lab[dev]"
+
+      - name: Verify execution-only recovery contract
+        run: |
+          test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
+          test "$(git -C orchestration rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C frozen rev-parse HEAD)" = "$ACQUISITION_COMMIT"
+          git -C orchestration merge-base --is-ancestor "$RECOVERY_PLAN_COMMIT" "$GITHUB_SHA"
+
+          for path in \
+            packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2.py \
+            packages/prediction-lab/src/prediction_lab/historical_validity_sources_v2_sharded.py
+          do
+            test "$(git -C orchestration rev-parse "HEAD:$path")" = \
+              "$(git -C frozen rev-parse "HEAD:$path")"
+          done
+
+          pytest -q \
+            orchestration/packages/prediction-lab/tests/test_historical_validity_shard1_recovery.py
+          ruff check \
+            orchestration/packages/prediction-lab/tools/historical_validity_shard1_recovery.py \
+            orchestration/packages/prediction-lab/tests/test_historical_validity_shard1_recovery.py
+          gh auth status
+
+      - name: Verify immutable successful-shard identities
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/original-artifacts.json"
+          python - "$RUNNER_TEMP/original-artifacts.json" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          artifacts = payload.get("artifacts", [])
+          expected = {
+              "historical-validity-source-discovery-v0.2-shard-0": (
+                  10318785658,
+                  "sha256:9f74f8a27e2ff357d09b0dabec61b9db18eb40ffb604688650e8ac082f297ec5",
+              ),
+              "historical-validity-source-discovery-v0.2-shard-2": (
+                  10317979396,
+                  "sha256:454aebe3a863664e2c1098af3ea15b793497fef01bbee4dfcbeadc535aaaf6ee",
+              ),
+              "historical-validity-source-discovery-v0.2-shard-3": (
+                  10318148617,
+                  "sha256:4fb96eb661d2bb0e1d3182d4f9124a26f022b31c6f61d49e09b50f9133033fd0",
+              ),
+          }
+          for name, (artifact_id, digest) in expected.items():
+              matches = [item for item in artifacts if item.get("name") == name]
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected exactly one artifact named {name}")
+              item = matches[0]
+              if item.get("id") != artifact_id or item.get("digest") != digest:
+                  raise SystemExit(f"Immutable artifact identity changed for {name}")
+              if item.get("expired") is not False:
+                  raise SystemExit(f"Artifact is expired or state unknown for {name}")
+              workflow = item.get("workflow_run") or {}
+              if workflow.get("id") != 34758856382:
+                  raise SystemExit(f"Workflow identity changed for {name}")
+              if workflow.get("head_sha") != (
+                  "70e1e0dedfd261dc00dc53e9be05b784d5a2f1a2"
+              ):
+                  raise SystemExit(f"Acquisition commit changed for {name}")
+          PY
+
+  recover-shard1-subshards:
+    needs: verify-recovery-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        subshard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+    steps:
+      - name: Checkout recovery orchestration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: orchestration
+
+      - name: Checkout frozen acquisition code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACQUISITION_COMMIT }}
+          path: frozen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frozen/packages/prediction-lab/pyproject.toml
+
+      - name: Install frozen Prediction Lab
+        run: python -m pip install -e "./frozen/packages/prediction-lab[dev]"
+
+      - name: Download exact frozen candidates and v1 locators
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=root / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34739814494,
+              name="historical-validity-source-discovery-v0.1",
+              digest="sha256:fa1b454d5a44699f7f314db5871268d416856db369bc6e58c2c54d8b79047622",
+              destination=root / "source-v1",
+              allowed_files=frozenset(
+                  {
+                      "code-commit.txt",
+                      "locators.jsonl",
+                      "parent-preregistration-commit.txt",
+                      "source-discovery-clarification-commit.txt",
+                      "source-discovery-protocol-commit.txt",
+                      "source-discovery-summary.json",
+                      "wayback-lookups.jsonl",
+                  }
+              ),
+              code_commit="ef5d0c7159f662af1099e089349698310c931183",
+          )
+          PY
+
+      - name: Download pinned original Common Crawl manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-0
+          path: ${{ runner.temp }}/pinned-shard0
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34758856382
+
+      - name: Recover one frozen shard-1 candidate
+        run: |
+          python orchestration/packages/prediction-lab/tools/historical_validity_shard1_recovery.py \
+            acquire \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/source-v1/locators.jsonl" \
+            "$RUNNER_TEMP/pinned-shard0/commoncrawl-collections.json" \
+            "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-shard-1-subshard-${{ matrix.subshard }}" \
+            --subshard-index "${{ matrix.subshard }}" \
+            --orchestration-commit "$GITHUB_SHA"
+
+      - name: Upload frozen shard-1 recovery subshard
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-1-subshard-${{ matrix.subshard }}
+          path: ${{ runner.temp }}/historical-validity-source-discovery-v0.2-shard-1-subshard-${{ matrix.subshard }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  reconstruct-shard1:
+    needs: recover-shard1-subshards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout recovery orchestration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: orchestration
+
+      - name: Checkout frozen acquisition code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACQUISITION_COMMIT }}
+          path: frozen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frozen/packages/prediction-lab/pyproject.toml
+
+      - name: Install frozen Prediction Lab
+        run: python -m pip install -e "./frozen/packages/prediction-lab[dev]"
+
+      - name: Download exact frozen candidates
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=root / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          PY
+
+      - name: Download pinned original Common Crawl manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-0
+          path: ${{ runner.temp }}/pinned-shard0
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34758856382
+
+      - name: Download all successful recovery subshards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: historical-validity-source-discovery-v0.2-shard-1-subshard-*
+          path: ${{ runner.temp }}/recovery-subshards
+          merge-multiple: false
+
+      - name: Freeze current-run recovery artifact identities
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/recovery-artifacts.json"
+
+      - name: Reconstruct original shard 1 with explicit provenance
+        run: |
+          python orchestration/packages/prediction-lab/tools/historical_validity_shard1_recovery.py \
+            reconstruct \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/recovery-subshards" \
+            "$RUNNER_TEMP/recovery-artifacts.json" \
+            "$RUNNER_TEMP/pinned-shard0/commoncrawl-collections.json" \
+            "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-shard-1" \
+            --orchestration-commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID"
+
+      - name: Upload reconstructed original shard 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-1-reconstructed
+          path: ${{ runner.temp }}/historical-validity-source-discovery-v0.2-shard-1/
+          if-no-files-found: error
+          retention-days: 90
+
+  merge-canonical-v2:
+    needs: reconstruct-shard1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout recovery orchestration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: orchestration
+
+      - name: Checkout frozen acquisition and merge code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ACQUISITION_COMMIT }}
+          path: frozen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frozen/packages/prediction-lab/pyproject.toml
+
+      - name: Install frozen Prediction Lab
+        run: python -m pip install -e "./frozen/packages/prediction-lab[dev]"
+
+      - name: Download exact frozen candidates
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from prediction_lab.artifact_identity import download_verified_artifact
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          download_verified_artifact(
+              repository="Ferdows-Ahmadi/trading-llm",
+              run_id=34738563200,
+              name="historical-validity-candidates-v0.1",
+              digest="sha256:dc19595f7c59e8ddf9787c9a24530c9b32eedcccffedb1040754e4b0a48780af",
+              destination=root / "candidates",
+              allowed_files=frozenset(
+                  {
+                      "candidates.csv",
+                      "candidates.manifest.json",
+                      "code-commit.txt",
+                      "preregistration-commit.txt",
+                  }
+              ),
+              code_commit="81b383ae79a10bbd54c6fd61ef1326bedaf0bfd9",
+          )
+          PY
+
+      - name: Download unchanged original shard 0
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-0
+          path: ${{ runner.temp }}/four-shards/historical-validity-source-discovery-v0.2-shard-0
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34758856382
+
+      - name: Download reconstructed shard 1
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-1-reconstructed
+          path: ${{ runner.temp }}/four-shards/historical-validity-source-discovery-v0.2-shard-1
+
+      - name: Download unchanged original shard 2
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-2
+          path: ${{ runner.temp }}/four-shards/historical-validity-source-discovery-v0.2-shard-2
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34758856382
+
+      - name: Download unchanged original shard 3
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-shard-3
+          path: ${{ runner.temp }}/four-shards/historical-validity-source-discovery-v0.2-shard-3
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34758856382
+
+      - name: Run unchanged four-shard canonical merge
+        run: |
+          python -m prediction_lab.historical_validity_sources_v2_sharded merge \
+            "$RUNNER_TEMP/candidates/candidates.csv" \
+            "$RUNNER_TEMP/four-shards" \
+            "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical" \
+            --code-commit "$ACQUISITION_COMMIT"
+
+      - name: Add recovery provenance sidecars and verify canonical accounting
+        run: |
+          cp \
+            "$RUNNER_TEMP/four-shards/historical-validity-source-discovery-v0.2-shard-1/reconstruction-manifest.json" \
+            "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/shard1-reconstruction-manifest.json"
+          printf '%s\n' "$GITHUB_SHA" \
+            > "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/recovery-orchestration-commit.txt"
+          printf '%s\n' "$ACQUISITION_COMMIT" \
+            > "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/acquisition-code-commit.txt"
+          printf '%s\n' "$RECOVERY_PLAN_COMMIT" \
+            > "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/recovery-plan-commit.txt"
+
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$ORIGINAL_RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/original-run-artifacts.json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical/recovery-run-artifacts.json"
+
+          python - "$RUNNER_TEMP/historical-validity-source-discovery-v0.2-canonical" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          summary = json.loads((root / "source-discovery-v2-summary.json").read_text())
+          if summary.get("candidate_rows") != 64:
+              raise SystemExit("Canonical v2 merge did not account for all 64 candidates")
+          if summary.get("candidate_sha256") != (
+              "6e6016ea64a4b9244ae0b4f23db962ee90d1297824418fe6272a4418bfa6ef21"
+          ):
+              raise SystemExit("Canonical v2 parent candidate identity changed")
+          if summary.get("code_commit") != (
+              "70e1e0dedfd261dc00dc53e9be05b784d5a2f1a2"
+          ):
+              raise SystemExit("Canonical v2 acquisition code commit changed")
+          if summary.get("commoncrawl_max_collections") != 6:
+              raise SystemExit("Canonical v2 Common Crawl collection bound changed")
+          if summary.get("commoncrawl_collections_sha256") != (
+              "9134eeb9976c3cbbbaff9830c007419dd300d5f7396b2268f4618e51441d274c"
+          ):
+              raise SystemExit("Canonical v2 Common Crawl manifest identity changed")
+          rows = [
+              json.loads(line)
+              for line in (root / "source-lookups-v2.jsonl").read_text().splitlines()
+              if line.strip()
+          ]
+          if len({str(row.get("question_id")) for row in rows}) != 64:
+              raise SystemExit("Canonical v2 ledger does not cover all 64 candidates")
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload canonical recovered v2 source-discovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-validity-source-discovery-v0.2-canonical
+          path: ${{ runner.temp }}/historical-validity-source-discovery-v0.2-canonical/
+          if-no-files-found: error
+          retention-days: 90
