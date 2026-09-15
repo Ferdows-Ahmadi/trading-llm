@@ -42,6 +42,7 @@ prediction-lab-filter-evidence = "prediction_lab.evidence_relevance_cli:main"
 prediction-lab-build-pilot = "prediction_lab.pilot_dataset_cli:main"
 prediction-lab-live-pilot-select = "prediction_lab.prospective_live_pilot_v01:main"
 prediction-lab-live-rss = "prediction_lab.prospective_live_rss_v01:main"
+prediction-lab-live-session = "prediction_lab.prospective_live_session_v01:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
