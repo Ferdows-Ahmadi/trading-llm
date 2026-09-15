@@ -6,10 +6,10 @@ import argparse
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Callable, Mapping, Protocol
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
@@ -589,7 +589,10 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _parser().parse_args()
     if args.command == "acquire":
-        with live_rss.GoogleNewsRssClient() as rss_client, custody.ProspectivePolymarketClient() as market_client:
+        with (
+            live_rss.GoogleNewsRssClient() as rss_client,
+            custody.ProspectivePolymarketClient() as market_client,
+        ):
             summary = run_acquisition(
                 selected_candidates_path=args.selected_candidates,
                 selection_manifest_path=args.selection_manifest,
