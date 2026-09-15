@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from defusedxml import ElementTree as ET
+from defusedxml import ElementTree
 
 METHOD_VERSION = "prospective-live-rss-v0.1"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
@@ -171,8 +171,8 @@ def parse_rss_items(
     if max_items < 1:
         raise ValueError("max_items must be at least 1")
     try:
-        root = ET.fromstring(raw_xml)
-    except ET.ParseError as exc:
+        root = ElementTree.fromstring(raw_xml)
+    except ElementTree.ParseError as exc:
         raise LiveCaptureError("Google News RSS returned malformed XML") from exc
 
     items: list[RssEvidenceItem] = []
