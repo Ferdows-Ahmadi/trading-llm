@@ -8,13 +8,13 @@ import html
 import json
 import re
 import time
-import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 import httpx
+from defusedxml import ElementTree as ET
 
 METHOD_VERSION = "prospective-live-rss-v0.1"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
@@ -124,7 +124,7 @@ class GoogleNewsRssClient:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> "GoogleNewsRssClient":
+    def __enter__(self) -> GoogleNewsRssClient:
         return self
 
     def __exit__(self, *_: object) -> None:
