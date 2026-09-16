@@ -44,6 +44,8 @@ prediction-lab-live-pilot-select = "prediction_lab.prospective_live_pilot_v01:ma
 prediction-lab-live-rss = "prediction_lab.prospective_live_rss_v01:main"
 prediction-lab-live-session = "prediction_lab.prospective_live_session_v01:main"
 prediction-lab-freeze-models-v02 = "prediction_lab.prospective_model_freeze_v02:main"
+prediction-lab-multimodel-select-v02 = "prediction_lab.prospective_live_multimodel_v02:main"
+prediction-lab-multimodel-session-v02 = "prediction_lab.prospective_live_multimodel_session_v02:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
