@@ -8,7 +8,6 @@ import pytest
 
 from prediction_lab import prospective_source_routing_v03 as routing
 
-
 RAW_RSS = b"""<?xml version='1.0' encoding='UTF-8'?>
 <rss><channel><item>
 <title>Baseline headline</title>
