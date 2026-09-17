@@ -8,7 +8,6 @@ import pytest
 
 from prediction_lab import prospective_model_freeze_v03 as freeze
 
-
 DIGESTS = {
     "llama3.1:8b": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e",
     "qwen3.5:9b": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
