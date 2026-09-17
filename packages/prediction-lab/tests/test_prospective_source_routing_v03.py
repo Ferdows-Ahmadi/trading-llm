@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
+import json
 
 import httpx
 import pytest
@@ -54,7 +54,8 @@ def test_direct_resolution_source_success_augments_only_condition_b(tmp_path) ->
     source_body = (
         b"<html><body><h1>Official resolution source</h1>"
         b"<p>This official page contains enough deterministic evidence text for the market. "
-        b"It is intentionally longer than one hundred characters so it is admitted.</p></body></html>"
+        b"It is intentionally longer than one hundred characters so it is admitted."
+        b"</p></body></html>"
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
