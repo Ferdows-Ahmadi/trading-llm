@@ -81,13 +81,14 @@ def _safe_http_url(value: object) -> str | None:
         return None
     try:
         parsed = urlparse(text)
+        port = parsed.port
     except ValueError:
         return None
     if parsed.scheme.lower() not in {"http", "https"}:
         return None
     if not parsed.hostname or parsed.username or parsed.password:
         return None
-    if parsed.port not in {None, 80, 443}:
+    if port not in {None, 80, 443}:
         return None
     host = parsed.hostname.rstrip(".").lower()
     if host == "localhost" or host.endswith(".localhost"):
@@ -311,13 +312,14 @@ def capture_paired_evidence(
                 )
                 source_receipt["visible_chars"] = len(text)
                 if len(text) >= SOURCE_MIN_CHARS:
+                    hostname = urlparse(url).hostname
                     routed_items.append(
                         {
                             "source_id": "resolution-source:"
                             + hashlib.sha256(url.encode("utf-8")).hexdigest(),
                             "source_type": "contract-resolution-source",
                             "uri_or_reference": str(receipt.get("final_url") or url),
-                            "title": f"Contract resolution source {index}: {urlparse(url).hostname}",
+                            "title": f"Contract resolution source {index}: {hostname}",
                             "published_at": "",
                             "available_at": "PENDING",
                             "text": text,
