@@ -280,6 +280,8 @@ def capture_paired_evidence(
     baseline_items: list[dict[str, Any]] = []
     routed_items: list[dict[str, Any]] = []
     source_receipts: list[dict[str, Any]] = []
+    condition_a_status = "retrieval_failure"
+    condition_b_status = "retrieval_failure"
     valid_urls = valid_resolution_urls(resolution_sources)
 
     try:
@@ -341,12 +343,16 @@ def capture_paired_evidence(
         for item in routed_items:
             item["available_at"] = completed_at
         condition_b_items = [*baseline_items, *routed_items]
-        status = "verified_complete" if baseline_items else "verified_empty"
+        condition_a_status = "verified_complete" if baseline_items else "verified_empty"
+        condition_b_status = "verified_complete" if condition_b_items else "verified_empty"
+        status = condition_b_status
     except (rss.LiveCaptureError, SourceRoutingError, httpx.HTTPError) as exc:
         completed = now()
         elapsed = (completed - started).total_seconds()
         completed_at = _iso_z(completed)
         status = "retrieval_failure"
+        condition_a_status = "retrieval_failure"
+        condition_b_status = "retrieval_failure"
         error = str(exc)[:500]
         baseline_items = []
         condition_b_items = []
@@ -377,6 +383,8 @@ def capture_paired_evidence(
         "direct_source_successes": sum(1 for value in source_receipts if value.get("admitted")),
         "condition_a_evidence_items": len(baseline_items),
         "condition_b_evidence_items": len(condition_b_items),
+        "condition_a_status": condition_a_status,
+        "condition_b_status": condition_b_status,
         "condition_a_sha256": _sha256(condition_a_bytes),
         "condition_b_sha256": _sha256(condition_b_bytes),
         "source_receipts_sha256": _sha256(receipts_bytes),
