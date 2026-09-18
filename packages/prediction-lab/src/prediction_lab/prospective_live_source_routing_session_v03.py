@@ -597,7 +597,9 @@ def run_forecasting(
     }
     _atomic_json(output_directory / "forecast-summary.json", summary)
     if not operational_success:
-        raise SourceRoutingSessionError(\n            "At least one frozen model-condition cell lacks terminal rows"\n        )
+        raise SourceRoutingSessionError(
+            "At least one frozen model-condition cell lacks terminal rows"
+        )
     return summary
 
 
