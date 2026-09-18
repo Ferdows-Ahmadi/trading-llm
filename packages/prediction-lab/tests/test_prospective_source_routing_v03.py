@@ -164,3 +164,44 @@ def test_capture_refuses_to_replace_existing_row(tmp_path) -> None:
         routing.capture_paired_evidence(**kwargs, clock=_ticks())  # type: ignore[arg-type]
     source_client.close()
     http.close()
+
+
+def test_direct_source_can_make_condition_b_complete_when_rss_is_empty(tmp_path) -> None:
+    empty_rss = b"<?xml version='1.0' encoding='UTF-8'?><rss><channel></channel></rss>"
+
+    class EmptyRss:
+        def search(self, question_text: str) -> tuple[bytes, str]:
+            assert question_text == "Will X happen?"
+            return empty_rss, "https://news.google.com/rss/search?q=x"
+
+    source_body = (
+        b"<html><body><p>This official source contains enough resolution evidence text "
+        b"to exceed one hundred characters and must therefore be admitted only to "
+        b"Condition B while Condition A remains verified empty.</p></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=source_body,
+            headers={"content-type": "text/html; charset=utf-8"},
+            request=request,
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    source_client = routing.ResolutionSourceClient(client=http, retries=1)
+    manifest = routing.capture_paired_evidence(
+        question_id="polymarket-market:5",
+        question_text="Will X happen?",
+        resolution_sources=["https://official.example/result"],
+        output_directory=tmp_path,
+        rss_client=EmptyRss(),  # type: ignore[arg-type]
+        source_client=source_client,
+        clock=_ticks(),  # type: ignore[arg-type]
+    )
+    assert manifest["condition_a_status"] == "verified_empty"
+    assert manifest["condition_b_status"] == "verified_complete"
+    assert manifest["condition_a_evidence_items"] == 0
+    assert manifest["condition_b_evidence_items"] == 1
+    source_client.close()
+    http.close()
