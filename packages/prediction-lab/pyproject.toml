@@ -50,6 +50,8 @@ prediction-lab-freeze-models-v03 = "prediction_lab.prospective_model_freeze_v03:
 prediction-lab-freeze-models-v04 = "prediction_lab.prospective_model_freeze_v04:main"
 prediction-lab-source-routing-select-v03 = "prediction_lab.prospective_live_source_routing_v03:main"
 prediction-lab-source-routing-session-v03 = "prediction_lab.prospective_live_source_routing_session_v03:main"
+prediction-lab-source-routing-select-v04 = "prediction_lab.prospective_live_source_routing_v04:main"
+prediction-lab-source-routing-session-v04 = "prediction_lab.prospective_live_source_routing_session_v04:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
