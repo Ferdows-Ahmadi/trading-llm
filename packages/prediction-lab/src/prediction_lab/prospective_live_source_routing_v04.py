@@ -18,7 +18,7 @@ from prediction_lab.prospective_polymarket_custody_keyset import (
 
 PROTOCOL_COMMIT = "24cb23281b0331ba5cbd3159cfc378733350248c"
 MODEL_MANIFEST_SHA256 = "3cac3f0949f844e39fb052d104d2a284f4eeef2ba3c1674263c2ba99c4bfa514"
-SELECTION_SEED = "prospective-live-source-routing-v0.4-selection-seed-2026-09-18"
+SELECTION_SEED = "prospective-live-source-routing-v0.4-selection-seed-2026-09-19"
 PURPOSE = "prospective-live-source-routing-v0.4"
 MIN_HORIZON = pd.Timedelta("7D")
 MAX_HORIZON = pd.Timedelta("30D")
