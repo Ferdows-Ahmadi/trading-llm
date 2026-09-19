@@ -1,0 +1,116 @@
+name: Hosted Llama 3.1 8B Development v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/hosted-llama31-development-v0.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  llama31-development:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify checkout before model acquisition
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh auth status
+
+      - name: Install and start local Ollama runtime
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          mkdir -p "$RUNNER_TEMP/llama-runtime"
+          ollama --version | tee "$RUNNER_TEMP/llama-runtime/ollama-version.txt"
+          sha256sum "$(command -v ollama)" | tee "$RUNNER_TEMP/llama-runtime/ollama-binary-sha256.txt"
+          uname -a | tee "$RUNNER_TEMP/llama-runtime/host.txt"
+          python --version 2>&1 | tee "$RUNNER_TEMP/llama-runtime/python-version.txt"
+          ollama serve > "$RUNNER_TEMP/llama-runtime/ollama-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/llama-runtime/ollama-server.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:11434/api/tags >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Ollama did not become ready" >&2
+          cat "$RUNNER_TEMP/llama-runtime/ollama-server.log" >&2 || true
+          exit 1
+
+      - name: Freeze Llama 3.1 8B artifact locally
+        run: |
+          ollama pull llama3.1:8b
+          curl --fail --silent --show-error http://127.0.0.1:11434/api/tags \
+            | tee "$RUNNER_TEMP/llama-runtime/ollama-tags-after-pull.json"
+          ollama show llama3.1:8b --modelfile \
+            > "$RUNNER_TEMP/llama-runtime/llama31-modelfile.txt"
+          ollama list | tee "$RUNNER_TEMP/llama-runtime/ollama-list.txt"
+
+      - name: Run frozen development experiment
+        run: |
+          python -m prediction_lab.local_development_cli \
+            --repository-root . \
+            --work-root "$RUNNER_TEMP/llama31-development" \
+            --ollama-model llama3.1:8b \
+            --ollama-base-url http://127.0.0.1:11434 \
+            --ollama-timeout-seconds 600
+
+      - name: Verify experiment summary exists
+        run: |
+          SUMMARY="$(find "$RUNNER_TEMP/llama31-development" -name local-development-summary.json -type f -print -quit)"
+          test -n "$SUMMARY"
+          python - "$SUMMARY" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding="utf-8"))
+          if value.get("dataset_role") != "development-only":
+              raise SystemExit("unexpected dataset role")
+          if value.get("holdout_accessed") is not False:
+              raise SystemExit("holdout access flag changed")
+          if value.get("code_commit") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("experiment code commit differs from workflow head")
+          modes = value.get("modes")
+          if not isinstance(modes, dict) or set(modes) != {"blind", "market-aware"}:
+              raise SystemExit("both forecast modes were not persisted")
+          print(json.dumps(value, indent=2, sort_keys=True))
+          PY
+          test -z "$(git status --porcelain)"
+
+      - name: Upload development experiment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama31-8b-development-v0.1
+          path: |
+            ${{ runner.temp }}/llama31-development/
+            ${{ runner.temp }}/llama-runtime/
+          if-no-files-found: warn
+          retention-days: 30

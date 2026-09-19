@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "provider": "Meta",
+  "model_id": "Meta-Llama-3.1-8B-Instruct",
+  "model_family": "Llama 3.1",
+  "parameter_count": "8B",
+  "release_date": "2024-07-23T00:00:00Z",
+  "official_knowledge_cutoff_text": "December 2023",
+  "knowledge_cutoff_granularity": "month",
+  "normalized_knowledge_cutoff_upper_bound": "2023-12-31T23:59:59Z",
+  "normalization_policy": "The official source publishes month-level granularity only. Historical scoring uses the final instant of that month as a conservative upper bound; it never substitutes an earlier date.",
+  "official_source": {
+    "repository": "meta-llama/llama-models",
+    "path": "models/llama3_1/MODEL_CARD.md",
+    "observed_blob_sha": "97c39fe34b93d02919ba1a01a487601eb020d90e",
+    "claims_used": [
+      "Llama 3.1 includes an 8B instruction-tuned text model.",
+      "Knowledge cutoff is December 2023.",
+      "Model release date is July 23, 2024.",
+      "The model is static and trained on an offline dataset."
+    ]
+  },
+  "local_execution": {
+    "runtime": "Ollama",
+    "recommended_tag": "llama3.1:8b",
+    "required_before_scoring": [
+      "Acquire the local artifact without modifying its weights.",
+      "Record the exact local model digest as sha256:<64 hex digest>.",
+      "Create a scoring metadata JSON using that digest as immutable_version.",
+      "Keep execution_mode=local and disable external tools or web access."
+    ]
+  },
+  "historical_scoring_status": "eligible_after-local-artifact-freeze",
+  "notes": "This record establishes model-family provenance only. It does not pretend that an unfrozen Ollama tag is an immutable model artifact."
+}

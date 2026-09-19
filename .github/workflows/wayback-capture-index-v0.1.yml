@@ -1,0 +1,323 @@
+name: Wayback Capture Index Pilot v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/wayback-capture-index-v0.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen v0.4 GDELT discovery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+
+          summary = json.loads(Path("discovery-pilot/discovery-summary.json").read_text())
+          if summary.get("pilot_questions") != 20:
+              raise SystemExit("unexpected discovery pilot size")
+          if int(summary.get("questions_with_results", 0)) < 12:
+              raise SystemExit("v0.4 discovery artifact did not pass the 12/20 gate")
+
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before Wayback lookup")
+          print("v0.4 questions with discovery:", summary["questions_with_results"])
+          PY
+
+      - name: Resolve exact pre-cutoff Wayback captures
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import csv
+          import hashlib
+          import json
+          import time
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          import httpx
+          import pandas as pd
+
+          from prediction_lab.commoncrawl_evidence import select_parent_event_pilot
+          from prediction_lab.datasets import verify_frozen_dataset
+
+          ENDPOINT = "https://web.archive.org/cdx/search/cdx"
+          USER_AGENT = "trading-prediction-lab/0.1 historical-evidence-research"
+          OUTPUT = Path("wayback-capture-index")
+          CHECKPOINTS = OUTPUT / "checkpoints"
+          OUTPUT.mkdir(parents=True, exist_ok=True)
+          CHECKPOINTS.mkdir(parents=True, exist_ok=True)
+          MIN_INTERVAL = 5.0
+          RETRIES = 3
+          BACKOFF = 5.0
+          TIMEOUT = 30.0
+          last_request_at: float | None = None
+
+          def utc(value: object) -> pd.Timestamp:
+              ts = pd.Timestamp(value)
+              if ts.tzinfo is None:
+                  return ts.tz_localize("UTC")
+              return ts.tz_convert("UTC")
+
+          def normalized_host(value: str) -> str:
+              value = value.lower()
+              return value[4:] if value.startswith("www.") else value
+
+          def same_exact_page(requested_url: str, archived_url: str) -> bool:
+              requested = urlparse(requested_url)
+              archived = urlparse(archived_url)
+              if normalized_host(requested.netloc) != normalized_host(archived.netloc):
+                  return False
+              if (requested.path or "/") != (archived.path or "/"):
+                  return False
+              if requested.query and requested.query != archived.query:
+                  return False
+              return True
+
+          def atomic_json(path: Path, payload: dict[str, object]) -> None:
+              tmp = path.with_suffix(path.suffix + ".tmp")
+              tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              tmp.replace(path)
+
+          def checkpoint_name(question_id: str, url: str) -> str:
+              return hashlib.sha256(f"{question_id}\n{url}".encode()).hexdigest() + ".json"
+
+          def request_with_retries(client: httpx.Client, params: list[tuple[str, str]]) -> tuple[httpx.Response | None, str | None]:
+              nonlocal_last = None
+              last_error: str | None = None
+              for attempt in range(RETRIES):
+                  global last_request_at
+                  if last_request_at is not None:
+                      remaining = MIN_INTERVAL - (time.monotonic() - last_request_at)
+                      if remaining > 0:
+                          time.sleep(remaining)
+                  try:
+                      response = client.get(ENDPOINT, params=params, headers={"User-Agent": USER_AGENT})
+                      last_request_at = time.monotonic()
+                      nonlocal_last = response
+                      if response.status_code != 429 and response.status_code < 500:
+                          return response, None
+                      last_error = f"HTTP {response.status_code}"
+                  except httpx.HTTPError as exc:
+                      last_request_at = time.monotonic()
+                      last_error = f"{type(exc).__name__}: {exc}"
+                  if attempt + 1 < RETRIES:
+                      time.sleep(BACKOFF * (2**attempt))
+              if nonlocal_last is not None:
+                  excerpt = nonlocal_last.text[:180].replace("\n", " ")
+                  return None, f"HTTP {nonlocal_last.status_code} after retries: {excerpt}"
+              return None, last_error or "unknown Wayback transport error"
+
+          development = verify_frozen_dataset(
+              csv_path="benchmark/development.csv",
+              manifest_path="benchmark/development.manifest.json",
+          )
+          if set(development["split"].astype(str)) != {"development"}:
+              raise SystemExit("Wayback stage accepts development rows only")
+          pilot = select_parent_event_pilot(development, size=20)
+          pilot_by_id = {str(row.question_id): row for row in pilot.itertuples(index=False)}
+
+          discovery: dict[str, dict[str, object]] = {}
+          for line in Path("discovery-pilot/discovery.jsonl").read_text(encoding="utf-8").splitlines():
+              if line.strip():
+                  item = json.loads(line)
+                  discovery[str(item["question_id"])] = item
+
+          rows: list[dict[str, object]] = []
+          with httpx.Client(timeout=TIMEOUT, follow_redirects=True) as client:
+              for question_id, row in pilot_by_id.items():
+                  item = discovery.get(question_id)
+                  if not item:
+                      continue
+                  articles = item.get("articles")
+                  if not isinstance(articles, list) or not articles:
+                      continue
+                  source_cutoff = utc(row.source_cutoff_at)
+                  artifact_cutoff = utc(item.get("source_cutoff_at"))
+                  if source_cutoff != artifact_cutoff:
+                      raise SystemExit(f"discovery cutoff mismatch for {question_id}")
+
+                  article = next((a for a in articles if isinstance(a, dict) and str(a.get("url") or "").strip()), None)
+                  if article is None:
+                      continue
+                  url = str(article["url"]).strip()
+                  checkpoint = CHECKPOINTS / checkpoint_name(question_id, url)
+                  if checkpoint.exists():
+                      rows.append(json.loads(checkpoint.read_text(encoding="utf-8")))
+                      continue
+
+                  cutoff_cdx = source_cutoff.strftime("%Y%m%d%H%M%S")
+                  params = [
+                      ("url", url),
+                      ("output", "json"),
+                      ("fl", "timestamp,original,mimetype,statuscode,digest,length"),
+                      ("filter", "statuscode:200"),
+                      ("filter", "mimetype:text/html"),
+                      ("matchType", "exact"),
+                      ("to", cutoff_cdx),
+                      ("limit", "1000"),
+                  ]
+                  response, transport_error = request_with_retries(client, params)
+                  capture: dict[str, object] | None = None
+                  error = ""
+                  status = "transport_failure"
+
+                  if transport_error is not None:
+                      error = transport_error
+                  elif response is None:
+                      error = "Wayback request produced no response"
+                  elif response.status_code == 404:
+                      status = "no_capture"
+                  elif response.status_code >= 400:
+                      error = f"Wayback CDX HTTP {response.status_code}: {response.text[:180].replace(chr(10), ' ')}"
+                  else:
+                      try:
+                          payload = response.json()
+                      except ValueError as exc:
+                          error = f"invalid Wayback JSON: {exc}"
+                      else:
+                          candidates: list[dict[str, object]] = []
+                          if isinstance(payload, list) and payload:
+                              header = payload[0] if isinstance(payload[0], list) else []
+                              for values in payload[1:]:
+                                  if not isinstance(values, list) or len(values) != len(header):
+                                      continue
+                                  record = dict(zip(header, values, strict=True))
+                                  try:
+                                      ts = pd.to_datetime(str(record["timestamp"]), format="%Y%m%d%H%M%S", utc=True)
+                                  except (KeyError, ValueError, TypeError):
+                                      continue
+                                  original = str(record.get("original") or "")
+                                  if ts > source_cutoff or not same_exact_page(url, original):
+                                      continue
+                                  if str(record.get("statuscode") or "") != "200":
+                                      continue
+                                  if "html" not in str(record.get("mimetype") or "").lower():
+                                      continue
+                                  candidates.append({
+                                      "archive": "wayback",
+                                      "timestamp": ts.isoformat(),
+                                      "url": original,
+                                      "digest": str(record.get("digest") or ""),
+                                      "length": str(record.get("length") or ""),
+                                      "replay_url": f"https://web.archive.org/web/{ts.strftime('%Y%m%d%H%M%S')}id_/{original}",
+                                  })
+                          if candidates:
+                              capture = max(candidates, key=lambda candidate: str(candidate["timestamp"]))
+                              status = "capture"
+                          else:
+                              status = "no_capture"
+
+                  record = {
+                      "question_id": question_id,
+                      "event_id": str(row.event_id),
+                      "source_cutoff_at": source_cutoff.isoformat(),
+                      "article_url": url,
+                      "article_title": str(article.get("title") or ""),
+                      "capture_found": capture is not None,
+                      "lookup_status": status,
+                      "capture": capture,
+                      "error": error,
+                  }
+                  atomic_json(checkpoint, record)
+                  rows.append(record)
+
+          rows.sort(key=lambda record: (str(record["question_id"]), str(record["article_url"])))
+          (OUTPUT / "captures.jsonl").write_text(
+              "".join(json.dumps(record, sort_keys=True) + "\n" for record in rows),
+              encoding="utf-8",
+          )
+          with (OUTPUT / "capture-audit.csv").open("w", newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(handle, fieldnames=["question_id", "event_id", "article_url", "capture_found", "lookup_status", "error"])
+              writer.writeheader()
+              for record in rows:
+                  writer.writerow({key: record[key] for key in writer.fieldnames})
+
+          captured_questions = {str(record["question_id"]) for record in rows if record["lookup_status"] == "capture"}
+          summary = {
+              "pilot_questions": len(pilot_by_id),
+              "questions_with_discovery": sum(bool(discovery.get(qid, {}).get("articles")) for qid in pilot_by_id),
+              "urls_considered": len(rows),
+              "captures_found": sum(record["lookup_status"] == "capture" for record in rows),
+              "questions_with_captures": len(captured_questions),
+              "urls_without_capture": sum(record["lookup_status"] == "no_capture" for record in rows),
+              "lookup_failures": sum(record["lookup_status"] == "transport_failure" for record in rows),
+              "max_urls_per_question": 1,
+              "provider": "internet-archive-wayback-cdx",
+          }
+          atomic_json(OUTPUT / "capture-summary.json", summary)
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Print Wayback audit
+        if: always()
+        run: |
+          if [ -f wayback-capture-index/capture-summary.json ]; then
+            cat wayback-capture-index/capture-summary.json
+            echo "--- Wayback capture audit ---"
+            cat wayback-capture-index/capture-audit.csv
+          else
+            echo "Wayback stage did not reach final summary. Preserving partial checkpoints."
+            find wayback-capture-index/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
+          fi
+
+      - name: Upload Wayback capture-index artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayback-capture-index-v0.1
+          path: wayback-capture-index/
+          if-no-files-found: error
+          retention-days: 14

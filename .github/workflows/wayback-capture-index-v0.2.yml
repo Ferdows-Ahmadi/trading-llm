@@ -1,0 +1,131 @@
+name: Wayback Capture Index Pilot v0.2
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/wayback-capture-index-v0.2.yml
+      - packages/prediction-lab/src/prediction_lab/wayback_capture_client.py
+      - packages/prediction-lab/src/prediction_lab/wayback_capture_cli.py
+      - packages/prediction-lab/src/prediction_lab/evidence_capture_stage.py
+      - packages/prediction-lab/tests/test_wayback_capture_client.py
+      - packages/prediction-lab/pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Download frozen v0.4 GDELT discovery artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.4
+          path: discovery-pilot
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34499882298
+
+      - name: Seed v0.2 from successful Wayback v0.1 checkpoints
+        uses: actions/download-artifact@v4
+        with:
+          name: wayback-capture-index-v0.1
+          path: wayback-capture-index
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34525534259
+
+      - name: Verify frozen inputs and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+
+          summary = json.loads(Path("discovery-pilot/discovery-summary.json").read_text())
+          if summary.get("pilot_questions") != 20:
+              raise SystemExit("unexpected discovery pilot size")
+          if int(summary.get("questions_with_results", 0)) < 12:
+              raise SystemExit("v0.4 discovery artifact did not pass the 12/20 gate")
+
+          seed = json.loads(Path("wayback-capture-index/capture-summary.json").read_text())
+          if seed.get("captures_found") != 12 or seed.get("lookup_failures") != 0:
+              raise SystemExit(f"unexpected Wayback v0.1 seed summary: {seed}")
+
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before Wayback lookup")
+          print("v0.4 questions with discovery:", summary["questions_with_results"])
+          print("v0.1 captures reused:", seed["captures_found"])
+          PY
+
+      - name: Expand exact pre-cutoff Wayback capture index
+        run: |
+          timeout 20m prediction-lab-wayback-capture-index \
+            benchmark/development.csv \
+            benchmark/development.manifest.json \
+            discovery-pilot/discovery.jsonl \
+            wayback-capture-index \
+            --pilot-size 20 \
+            --max-urls-per-question 3 \
+            --retries 3 \
+            --timeout-seconds 30 \
+            --retry-backoff-seconds 3 \
+            --minimum-interval-seconds 3 \
+            --result-limit 1000
+
+      - name: Print Wayback v0.2 audit
+        if: always()
+        run: |
+          if [ -f wayback-capture-index/capture-summary.json ]; then
+            cat wayback-capture-index/capture-summary.json
+            echo "--- Wayback capture audit ---"
+            cat wayback-capture-index/capture-audit.csv
+          else
+            echo "Wayback stage did not reach final summary. Preserving partial checkpoints."
+            find wayback-capture-index/checkpoints -type f -name '*.json' 2>/dev/null | wc -l
+          fi
+
+      - name: Upload Wayback v0.2 capture-index artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayback-capture-index-v0.2
+          path: wayback-capture-index/
+          if-no-files-found: error
+          retention-days: 14

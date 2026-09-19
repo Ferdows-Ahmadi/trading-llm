@@ -1,0 +1,86 @@
+name: GDELT Discovery Pilot v0.3
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/gdelt-discovery-pilot-v0.3.yml
+      - packages/prediction-lab/src/prediction_lab/evidence_discovery_stage.py
+      - packages/prediction-lab/src/prediction_lab/evidence_discovery_cli.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download frozen clean Polymarket benchmark
+        uses: actions/download-artifact@v4
+        with:
+          name: polymarket-public-benchmark-v0.1-clean
+          path: benchmark
+          github-token: ${{ github.token }}
+          repository: Ferdows-Ahmadi/trading-llm
+          run-id: 34467576128
+
+      - name: Verify development benchmark and remove holdout
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          development = Path("benchmark/development.csv")
+          actual = hashlib.sha256(development.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"development benchmark hash mismatch: {actual}")
+          for path in Path("benchmark").glob("holdout*"):
+              path.unlink()
+          print("development benchmark sha256:", actual)
+          print("holdout files removed before discovery")
+          PY
+
+      - name: Run resumable GDELT discovery stage
+        run: |
+          prediction-lab-gdelt-discovery \
+            benchmark/development.csv \
+            benchmark/development.manifest.json \
+            discovery-pilot \
+            --pilot-size 20 \
+            --lookback-days 45 \
+            --max-records 20 \
+            --retries 3 \
+            --minimum-interval-seconds 5
+
+      - name: Print discovery audit
+        run: |
+          cat discovery-pilot/discovery-summary.json
+          echo "--- discovery audit ---"
+          cat discovery-pilot/discovery-audit.csv
+
+      - name: Upload discovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdelt-discovery-pilot-v0.3
+          path: discovery-pilot/
+          if-no-files-found: error
+          retention-days: 14

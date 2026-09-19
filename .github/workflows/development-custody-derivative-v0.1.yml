@@ -1,0 +1,199 @@
+name: Development Custody Derivative v0.1
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/development-custody-derivative-v0.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  derive-development-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install prediction lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify preregistered custody contract
+        run: |
+          test "$(git branch --show-current)" = "research/prediction-market-lab-v0.1"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f docs/experiments/development-historical-validity-v1-preregistration.md
+          git merge-base --is-ancestor c3a66d28d7126155935ccdd255034e7560dce6f0 "$GITHUB_SHA"
+          gh auth status
+
+      - name: Selectively derive canonical development members
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/development-only"
+          gh api \
+            repos/Ferdows-Ahmadi/trading-llm/actions/runs/34467576128/artifacts \
+            > "$RUNNER_TEMP/artifacts.json"
+          python - "$RUNNER_TEMP/artifacts.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          expected = {
+              "id": 10148227264,
+              "name": "polymarket-public-benchmark-v0.1-clean",
+              "digest": "sha256:5d347520903527abfa00dfa2618d44f1b709b849d5bca731dae61bc524e61ebb",
+              "run_id": 34467576128,
+              "head_sha": "7a2ef17b12bb7ede33bae7863532e7b408ce38be",
+          }
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          artifacts = payload.get("artifacts")
+          if not isinstance(artifacts, list):
+              raise SystemExit("artifact listing missing artifacts")
+          matches = [item for item in artifacts if item.get("name") == expected["name"]]
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one canonical benchmark artifact")
+          item = matches[0]
+          if item.get("id") != expected["id"]:
+              raise SystemExit("canonical artifact numeric ID changed")
+          if item.get("digest") != expected["digest"]:
+              raise SystemExit("canonical artifact digest changed")
+          if item.get("expired") is not False:
+              raise SystemExit("canonical artifact is expired or expiry is unknown")
+          workflow = item.get("workflow_run") or {}
+          if workflow.get("id") != expected["run_id"]:
+              raise SystemExit("canonical artifact run changed")
+          if workflow.get("head_sha") != expected["head_sha"]:
+              raise SystemExit("canonical artifact source commit changed")
+          PY
+
+          gh api \
+            repos/Ferdows-Ahmadi/trading-llm/actions/artifacts/10148227264/zip \
+            > "$RUNNER_TEMP/canonical-benchmark.zip"
+
+          python - "$RUNNER_TEMP/canonical-benchmark.zip" "$RUNNER_TEMP/development-only" "$GITHUB_SHA" <<'PY'
+          import hashlib
+          import json
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          archive_path = Path(sys.argv[1])
+          output = Path(sys.argv[2])
+          code_commit = sys.argv[3]
+
+          expected_zip = "5d347520903527abfa00dfa2618d44f1b709b849d5bca731dae61bc524e61ebb"
+          actual_zip = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+          if actual_zip != expected_zip:
+              raise SystemExit(f"canonical archive digest mismatch: {actual_zip}")
+
+          expected_members = {
+              "acquisition-summary.json",
+              "baselines.json",
+              "development.csv",
+              "development.manifest.json",
+              "holdout.csv",
+              "holdout.manifest.json",
+              "source-markets.jsonl",
+              "source-trades.jsonl",
+          }
+          selected = {"development.csv", "development.manifest.json"}
+          with zipfile.ZipFile(archive_path) as archive:
+              names = [item.filename for item in archive.infolist()]
+              if len(names) != len(set(names)) or set(names) != expected_members:
+                  raise SystemExit(f"unexpected canonical archive directory: {sorted(names)}")
+              # Deliberately read/decompress only the two authorized development members.
+              for name in sorted(selected):
+                  (output / name).write_bytes(archive.read(name))
+
+          development_bytes = (output / "development.csv").read_bytes()
+          development_sha = hashlib.sha256(development_bytes).hexdigest()
+          expected_development_sha = "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7"
+          if development_sha != expected_development_sha:
+              raise SystemExit("development CSV digest changed")
+
+          receipt = {
+              "schema_version": 1,
+              "source_run_id": 34467576128,
+              "source_artifact_id": 10148227264,
+              "source_artifact_digest": "sha256:" + expected_zip,
+              "source_head_sha": "7a2ef17b12bb7ede33bae7863532e7b408ce38be",
+              "development_csv_sha256": development_sha,
+              "extracted_members": sorted(selected),
+              "reserved_members_decompressed": False,
+              "preregistration_commit": "c3a66d28d7126155935ccdd255034e7560dce6f0",
+              "code_commit": code_commit,
+          }
+          (output / "custody-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          rm -f "$RUNNER_TEMP/canonical-benchmark.zip"
+
+      - name: Verify development-only derivative
+        run: |
+          python - "$RUNNER_TEMP/development-only" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          from prediction_lab.datasets import verify_frozen_dataset
+
+          root = Path(sys.argv[1])
+          allowed = {"development.csv", "development.manifest.json", "custody-receipt.json"}
+          actual = {path.name for path in root.iterdir() if path.is_file()}
+          if actual != allowed:
+              raise SystemExit(f"unexpected derivative members: {sorted(actual)}")
+          if any("holdout" in path.name.lower() for path in root.iterdir()):
+              raise SystemExit("reserved material found in derivative")
+
+          frame = verify_frozen_dataset(
+              csv_path=root / "development.csv",
+              manifest_path=root / "development.manifest.json",
+          )
+          payload_sha = hashlib.sha256((root / "development.csv").read_bytes()).hexdigest()
+          if payload_sha != "c05cbfa404804789faec779877c839b6655abc317217f182a673b2e91bd9f9a7":
+              raise SystemExit("verified development hash differs from canonical identity")
+          if len(frame) != 255 or frame["question_id"].nunique() != 255:
+              raise SystemExit("canonical development row/question count changed")
+          if frame["event_id"].astype(str).nunique() != 84:
+              raise SystemExit("canonical development event-group count changed")
+          if set(frame["split"].astype(str)) != {"development"}:
+              raise SystemExit("derivative contains non-development rows")
+
+          receipt = json.loads((root / "custody-receipt.json").read_text(encoding="utf-8"))
+          if receipt.get("reserved_members_decompressed") is not False:
+              raise SystemExit("custody receipt does not preserve reserved-member boundary")
+          print("development_sha256:", payload_sha)
+          print("development_rows:", len(frame))
+          print("development_event_groups:", frame["event_id"].nunique())
+          PY
+
+      - name: Upload development-only derivative
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymarket-development-v0.1-custody-derivative
+          path: ${{ runner.temp }}/development-only/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-prediction-lab"
+version = "0.1.0"
+description = "Leakage-safe evaluation harness for prediction-market forecasts"
+requires-python = ">=3.12"
+dependencies = [
+  "defusedxml>=0.7.1,<1.0.0",
+  "duckdb>=1.1.3,<2.0.0",
+  "httpx>=0.27.2,<1.0.0",
+  "numpy>=2.1.2,<3.0.0",
+  "pandas>=2.2.3,<3.0.0",
+  "warcio>=1.7.5,<2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.3,<9.0.0",
+  "pytest-cov>=5.0.0,<6.0.0",
+  "ruff>=0.8.0,<1.0.0",
+  "mypy>=1.13.0,<2.0.0",
+]
+
+[project.scripts]
+prediction-lab = "prediction_lab.cli:main"
+prediction-lab-build = "prediction_lab.benchmark_cli:main"
+prediction-lab-baselines = "prediction_lab.baseline_cli:main"
+prediction-lab-fetch-kalshi = "prediction_lab.kalshi_public_cli:main"
+prediction-lab-fetch-polymarket = "prediction_lab.polymarket_public_cli:main"
+prediction-lab-research = "prediction_lab.research_cli:main"
+prediction-lab-local-development = "prediction_lab.local_development_cli:main"
+prediction-lab-evidence-pilot = "prediction_lab.commoncrawl_evidence_cli:main"
+prediction-lab-news-evidence-pilot = "prediction_lab.gdelt_evidence_cli:main"
+prediction-lab-gdelt-discovery = "prediction_lab.evidence_discovery_cli:main"
+prediction-lab-cc-capture-index = "prediction_lab.evidence_capture_cli:main"
+prediction-lab-wayback-capture-index = "prediction_lab.wayback_capture_cli:main"
+prediction-lab-wayback-freeze-content = "prediction_lab.wayback_content_cli:main"
+prediction-lab-filter-evidence = "prediction_lab.evidence_relevance_cli:main"
+prediction-lab-build-pilot = "prediction_lab.pilot_dataset_cli:main"
+prediction-lab-live-pilot-select = "prediction_lab.prospective_live_pilot_v01:main"
+prediction-lab-live-rss = "prediction_lab.prospective_live_rss_v01:main"
+prediction-lab-live-session = "prediction_lab.prospective_live_session_v01:main"
+prediction-lab-freeze-models-v02 = "prediction_lab.prospective_model_freeze_v02:main"
+prediction-lab-multimodel-select-v02 = "prediction_lab.prospective_live_multimodel_v02:main"
+prediction-lab-multimodel-session-v02 = "prediction_lab.prospective_live_multimodel_session_v02:main"
+prediction-lab-freeze-models-v03 = "prediction_lab.prospective_model_freeze_v03:main"
+prediction-lab-freeze-models-v04 = "prediction_lab.prospective_model_freeze_v04:main"
+prediction-lab-source-routing-select-v03 = "prediction_lab.prospective_live_source_routing_v03:main"
+prediction-lab-source-routing-session-v03 = "prediction_lab.prospective_live_source_routing_session_v03:main"
+prediction-lab-source-routing-select-v04 = "prediction_lab.prospective_live_source_routing_v04:main"
+prediction-lab-source-routing-session-v04 = "prediction_lab.prospective_live_source_routing_session_v04:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "S", "C4"]
+ignore = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

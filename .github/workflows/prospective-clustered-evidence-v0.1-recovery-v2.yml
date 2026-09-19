@@ -1,0 +1,271 @@
+name: Prospective Clustered Evidence v0.1 Recovery v2
+
+on:
+  push:
+    branches:
+      - research/prediction-market-lab-v0.1
+    paths:
+      - .github/workflows/prospective-clustered-evidence-v0.1-recovery-v2.yml
+      - packages/prediction-lab/src/prediction_lab/prospective_evidence_recovery_v02.py
+      - packages/prediction-lab/tests/test_prospective_evidence_recovery_v02.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CUSTODY_ARTIFACT_ID: "10323747083"
+  CUSTODY_ARCHIVE_SHA256: "01eebf244add1ff21ee8d21257a000c5ee9588f751ae456e7fc7d17c0704a6aa"
+  V2_AMENDMENT_COMMIT: "a4b8be56fbb7e5291c6d72c122f880609627e972"
+  ORIGINAL_SEED_ARTIFACT_ID: "10326569219"
+  ORIGINAL_SEED_SHA256: "c5a634563cbd2fddb5624750b17122edb7e1d2557b0f2a6780f8329f29540268"
+  V1_SHARD_0_ID: "10338413642"
+  V1_SHARD_0_SHA256: "b59800c3cc88653362499e30e344ab63d8e5c913a41fcf9104a5e49c7578887b"
+  V1_SHARD_1_ID: "10336931583"
+  V1_SHARD_1_SHA256: "13c57aaeb1f29aad7ddb71c5bd37e9b3ea8a8cdd2773f9dcae25fe55286d3be4"
+  V1_SHARD_2_ID: "10339211930"
+  V1_SHARD_2_SHA256: "9da6ce9cc67b2a494dd7ccdfbd86459f57a83cb9c1597a63f4a42b9850292695"
+  V1_SHARD_3_ID: "10339470819"
+  V1_SHARD_3_SHA256: "af72149ab8f4f4c198ee28c508f639d70bd8bb149c8e93f0b60404f17edaf66a"
+  SHARD_COUNT: "4"
+
+jobs:
+  recover:
+    name: recover-v2-${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install Prediction Lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Verify frozen v2 recovery contract
+        run: |
+          test "$GITHUB_REF_NAME" = "research/prediction-market-lab-v0.1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$V2_AMENDMENT_COMMIT" "$GITHUB_SHA"
+          python - <<'PY'
+          import os
+          from prediction_lab import prospective_evidence_recovery_v02 as recovery
+
+          assert recovery.RECOVERY_V2_AMENDMENT_COMMIT == os.environ["V2_AMENDMENT_COMMIT"]
+          assert recovery.DEFAULT_SHARD_COUNT == int(os.environ["SHARD_COUNT"])
+          assert recovery.GDELT_MINIMUM_INTERVAL_SECONDS == 24.0
+          assert recovery.GDELT_RETRIES == 8
+          assert recovery.GDELT_RETRY_BACKOFF_SECONDS == 5.0
+          assert recovery.COMMON_CRAWL_TIMEOUT_SECONDS == 60.0
+          assert recovery.COMMON_CRAWL_RETRIES == 8
+          assert recovery.COMMON_CRAWL_RETRY_BACKOFF_SECONDS == 2.0
+          assert recovery.COMMON_CRAWL_MINIMUM_INTERVAL_SECONDS == 1.0
+          PY
+          pytest -q \
+            packages/prediction-lab/tests/test_prospective_evidence_v01.py \
+            packages/prediction-lab/tests/test_prospective_evidence_recovery_v01.py \
+            packages/prediction-lab/tests/test_prospective_evidence_recovery_v02.py
+          ruff check \
+            packages/prediction-lab/src/prediction_lab/prospective_evidence_v01.py \
+            packages/prediction-lab/src/prediction_lab/prospective_evidence_recovery_v01.py \
+            packages/prediction-lab/src/prediction_lab/prospective_evidence_recovery_v02.py \
+            packages/prediction-lab/tests/test_prospective_evidence_recovery_v02.py
+
+      - name: Download immutable custody and prior recovery artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$CUSTODY_ARTIFACT_ID/zip" > "$RUNNER_TEMP/custody.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ORIGINAL_SEED_ARTIFACT_ID/zip" > "$RUNNER_TEMP/original-seed.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_0_ID/zip" > "$RUNNER_TEMP/v1-shard-0.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_1_ID/zip" > "$RUNNER_TEMP/v1-shard-1.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_2_ID/zip" > "$RUNNER_TEMP/v1-shard-2.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_3_ID/zip" > "$RUNNER_TEMP/v1-shard-3.zip"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          expected = {
+              "custody.zip": os.environ["CUSTODY_ARCHIVE_SHA256"],
+              "original-seed.zip": os.environ["ORIGINAL_SEED_SHA256"],
+              "v1-shard-0.zip": os.environ["V1_SHARD_0_SHA256"],
+              "v1-shard-1.zip": os.environ["V1_SHARD_1_SHA256"],
+              "v1-shard-2.zip": os.environ["V1_SHARD_2_SHA256"],
+              "v1-shard-3.zip": os.environ["V1_SHARD_3_SHA256"],
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (name, actual, digest)
+          PY
+          for name in original-seed v1-shard-0 v1-shard-1 v1-shard-2 v1-shard-3; do
+            mkdir -p "$RUNNER_TEMP/$name"
+            unzip -q "$RUNNER_TEMP/$name.zip" -d "$RUNNER_TEMP/$name"
+          done
+
+      - name: Assemble immutable v2 seed
+        run: |
+          python -m prediction_lab.prospective_evidence_recovery_v02 seed \
+            "$RUNNER_TEMP/custody.zip" \
+            "$RUNNER_TEMP/v2-seed" \
+            "$RUNNER_TEMP/original-seed" \
+            "$RUNNER_TEMP/v1-shard-0" \
+            "$RUNNER_TEMP/v1-shard-1" \
+            "$RUNNER_TEMP/v1-shard-2" \
+            "$RUNNER_TEMP/v1-shard-3"
+
+      - name: Recover deterministic evidence shard v2
+        run: |
+          python -m prediction_lab.prospective_evidence_recovery_v02 shard \
+            "$RUNNER_TEMP/custody.zip" \
+            "$RUNNER_TEMP/v2-seed" \
+            "$RUNNER_TEMP/recovery-v2-shard-${{ matrix.shard }}" \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count "$SHARD_COUNT" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Upload v2 shard checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-clustered-evidence-v0.1-recovery-v2-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/recovery-v2-shard-${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 90
+
+  merge:
+    name: merge-recovery-v2
+    if: always()
+    needs: recover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/prediction-lab/pyproject.toml
+
+      - name: Install Prediction Lab
+        run: python -m pip install -e "./packages/prediction-lab[dev]"
+
+      - name: Download immutable custody and prior recovery artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$CUSTODY_ARTIFACT_ID/zip" > "$RUNNER_TEMP/custody.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ORIGINAL_SEED_ARTIFACT_ID/zip" > "$RUNNER_TEMP/original-seed.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_0_ID/zip" > "$RUNNER_TEMP/v1-shard-0.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_1_ID/zip" > "$RUNNER_TEMP/v1-shard-1.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_2_ID/zip" > "$RUNNER_TEMP/v1-shard-2.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V1_SHARD_3_ID/zip" > "$RUNNER_TEMP/v1-shard-3.zip"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          expected = {
+              "custody.zip": os.environ["CUSTODY_ARCHIVE_SHA256"],
+              "original-seed.zip": os.environ["ORIGINAL_SEED_SHA256"],
+              "v1-shard-0.zip": os.environ["V1_SHARD_0_SHA256"],
+              "v1-shard-1.zip": os.environ["V1_SHARD_1_SHA256"],
+              "v1-shard-2.zip": os.environ["V1_SHARD_2_SHA256"],
+              "v1-shard-3.zip": os.environ["V1_SHARD_3_SHA256"],
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (name, actual, digest)
+          PY
+          for name in original-seed v1-shard-0 v1-shard-1 v1-shard-2 v1-shard-3; do
+            mkdir -p "$RUNNER_TEMP/$name"
+            unzip -q "$RUNNER_TEMP/$name.zip" -d "$RUNNER_TEMP/$name"
+          done
+
+      - name: Assemble immutable v2 seed
+        run: |
+          python -m prediction_lab.prospective_evidence_recovery_v02 seed \
+            "$RUNNER_TEMP/custody.zip" \
+            "$RUNNER_TEMP/v2-seed" \
+            "$RUNNER_TEMP/original-seed" \
+            "$RUNNER_TEMP/v1-shard-0" \
+            "$RUNNER_TEMP/v1-shard-1" \
+            "$RUNNER_TEMP/v1-shard-2" \
+            "$RUNNER_TEMP/v1-shard-3"
+
+      - name: Download v2 shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: prospective-clustered-evidence-v0.1-recovery-v2-shard-*
+          path: ${{ runner.temp }}/v2-shards
+
+      - name: Merge and finalize only if all rows are terminal
+        run: |
+          python -m prediction_lab.prospective_evidence_recovery_v02 merge \
+            "$RUNNER_TEMP/custody.zip" \
+            "$RUNNER_TEMP/v2-seed" \
+            "$RUNNER_TEMP/v2-shards" \
+            "$RUNNER_TEMP/prospective-clustered-evidence-v0.1-recovered-v2" \
+            --code-commit "$GITHUB_SHA"
+
+      - name: Verify canonical recovered evidence accounting
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "prospective-clustered-evidence-v0.1-recovered-v2"
+          summary = json.loads((root / "evidence-summary.json").read_text())
+          assert summary["rows"] == 77
+          assert summary["event_groups"] == 53
+          assert sum(summary["status_counts"].values()) == 77
+          assert set(summary["status_counts"]).issubset({"verified_complete", "verified_empty"})
+          assert summary["forecast_ready"] is True
+          assert summary["attempted_this_run"] == 0
+          assert summary["reused_verified_checkpoints"] == 77
+          assert summary["reserved_holdout_accessed"] is False
+          assert summary["model_forecast_run"] is False
+          assert summary["outcomes_accessed"] is False
+          print("status_counts:", summary["status_counts"])
+          print("questions_with_evidence:", summary["questions_with_evidence"])
+          print("questions_without_evidence:", summary["questions_without_evidence"])
+          print("total_evidence_items:", summary["total_evidence_items"])
+          print("evidence_fixture_sha256:", summary["evidence_fixture_sha256"])
+          print("evidence_packets_sha256:", summary["evidence_packets_sha256"])
+          print("evidence_audit_sha256:", summary["evidence_audit_sha256"])
+          PY
+
+      - name: Upload recovered v2 evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-clustered-evidence-v0.1-recovered-v2
+          path: ${{ runner.temp }}/prospective-clustered-evidence-v0.1-recovered-v2/
+          if-no-files-found: warn
+          retention-days: 90
